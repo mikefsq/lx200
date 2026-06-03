@@ -1,1 +1,81 @@
 # lx200
+
+A transport-agnostic Go library for the Meade **LX200** command protocol family —
+the `:CMD#`-framed serial/TCP dialect spoken (with vendor extensions) by 10Micron,
+ZWO AM-series, Rainbow Astro RST, OnStep, and many other telescope mounts.
+
+Module path: `github.com/mikefsq/lx200`
+
+It is **dependency-light and ASCOM/Alpaca-agnostic**: import it to drive a mount
+in-process. The Alpaca Telescope wrapper lives in a separate module
+(`lx200alpaca`) so this core never pulls in an HTTP server.
+
+## Layout
+
+```
+lx200/
+├── lx200.go          Conn + the four framing primitives
+├── commands.go       shared LX200 command set (coords, target, slew, sync, …)
+├── sexagesimal.go    HH:MM:SS / sDD*MM:SS parsing & formatting
+├── mount.go          Mount interface + optional capability interfaces
+├── serial/           serial transport (isolates the go.bug.st/serial dependency)
+├── tenmicron/        10Micron GM-series      (TCP)
+├── am5/              ZWO AM3/AM5/AM5N/AM7     (USB-serial or WiFi/TCP)
+├── rst/              Rainbow Astro RST-135/300 (USB-serial)
+└── onstep/           OnStep / OnStepX        (USB-serial or WiFi/TCP)
+```
+
+Each per-mount package embeds the core `*lx200.Conn` for the common command set
+and adds only its vendor-specific status, tracking, park, and site commands.
+
+## Design
+
+- **Framing.** Every LX200 reply is one of four shapes, selected by the primitive
+  you call: `Blind` (no reply — `:Q#`, `:Mn#`), `Ack` (one byte `0`/`1` — the
+  `:Sr`/`:Sd`/`:St…` set commands), `Get` (read until `#` — the `:Gx#` queries),
+  and `Slew` (`:MS#` → `0` started, else a `#`-terminated fault). Commands are
+  serialized and bounded by a read deadline.
+- **Capabilities.** `Mount` is the contract every per-mount type satisfies.
+  Features not all mounts share — park/unpark, find-home, side-of-pier, alt/az,
+  pulse-guide, per-axis move, track-rate select, site geometry, UTC clock — are
+  small optional interfaces a consumer type-asserts for, so a driver advertises
+  exactly what the hardware supports.
+- **Transports.** TCP (`DialTCP`, e.g. 10Micron) and serial (`serial.Open`, for
+  USB/RS-232). A TCP-only build never links the serial library.
+
+## Usage
+
+```go
+import "github.com/mikefsq/lx200/tenmicron"
+
+m, err := tenmicron.Connect("10.0.1.51:3492") // 10Micron over TCP
+if err != nil { /* ... */ }
+ra, _ := m.RA()
+m.SetTargetRA(12.5)
+m.SetTargetDec(45.0)
+m.SlewToTarget()
+```
+
+```go
+import "github.com/mikefsq/lx200/am5"
+
+m, err := am5.Open("/dev/tty.usbserial-XXXX") // USB-serial …
+// m, err := am5.Dial("192.168.4.1:4030")     // … or WiFi/TCP
+```
+
+`rst.Open` / `rst.Find` (auto-detect by USB id) and `onstep.Open` / `onstep.Dial`
+follow the same pattern.
+
+## Status
+
+| Mount | Transport | Validation |
+|---|---|---|
+| 10Micron | TCP | against hardware |
+| Rainbow RST | serial | reverse-engineered from serial captures |
+| ZWO AM5 | serial / TCP | from the INDI driver + vendor protocol; verify on hardware |
+| OnStep | serial / TCP | from the INDI driver + vendor protocol; verify on hardware |
+
+## License
+
+MIT — see [LICENSE](LICENSE). This is original code; it embeds no vendor
+headers or third-party source.

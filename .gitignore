@@ -1,0 +1,8 @@
+# macOS / editor junk
+.DS_Store
+
+# build artifacts (none expected for this pure-Go module; defensive)
+*.dylib
+*.so
+*.a
+*.test

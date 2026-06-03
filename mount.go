@@ -1,0 +1,112 @@
+package lx200
+
+import "time"
+
+// Mount is the contract a per-mount library satisfies and the Alpaca Telescope
+// wrapper consumes. The embedded *Conn already provides the coordinate, target,
+// slew, sync, and halt methods; a per-mount type completes the interface by
+// adding the status/tracking members, which diverge per mount (each vendor has a
+// different status command and tracking-enable command), then overrides any core
+// method whose dialect differs (e.g. a degrees-based sync).
+//
+// Capabilities that not every mount has are NOT in Mount — they are the small
+// optional interfaces below. The wrapper type-asserts for them to advertise the
+// matching Alpaca Can*/Has* flags (the same pattern as the server's Busyable).
+type Mount interface {
+	// Pointing (read)
+	RA() (float64, error)
+	Dec() (float64, error)
+
+	// Target + goto/sync
+	SetTargetRA(hours float64) (bool, error)
+	SetTargetDec(deg float64) (bool, error)
+	SlewToTarget() error
+	SyncToTarget() (string, error)
+	Halt() error
+
+	// Status — implemented per mount (status/tracking commands diverge)
+	Slewing() (bool, error)
+	Tracking() (bool, error)
+	SetTracking(on bool) error
+}
+
+// PierSide reports the mount's pointing state of the German-equatorial pier (or
+// the harmonic-mount equivalent). Values match ASCOM PierSide.
+type PierSide int
+
+const (
+	PierUnknown PierSide = -1
+	PierEast    PierSide = 0
+	PierWest    PierSide = 1
+)
+
+// --- Optional capability interfaces (type-asserted by the Alpaca wrapper) ---
+
+// Parker is implemented by mounts that can park/unpark. (Alpaca CanPark/CanUnpark.)
+type Parker interface {
+	Park() error
+	Unpark() error
+	AtPark() (bool, error)
+}
+
+// Homer is implemented by mounts that can find/go home. (Alpaca CanFindHome.)
+type Homer interface {
+	FindHome() error
+	AtHome() (bool, error)
+}
+
+// PierSider is implemented by mounts that report side of pier. (Alpaca SideOfPier.)
+type PierSider interface {
+	PierSide() (PierSide, error)
+}
+
+// Horizontal is implemented by mounts that report Alt/Az directly. (Alpaca
+// Altitude/Azimuth — otherwise the wrapper derives them.)
+type Horizontal interface {
+	Altitude() (float64, error)
+	Azimuth() (float64, error)
+}
+
+// Guider is implemented by mounts supporting timed pulse guiding. (Alpaca
+// CanPulseGuide; *Conn satisfies this via PulseGuide.)
+type Guider interface {
+	PulseGuide(d Direction, ms int) error
+}
+
+// AxisMover is implemented by mounts supporting continuous per-axis slews.
+// (Alpaca MoveAxis; *Conn satisfies this via MoveAxis/StopAxis.)
+type AxisMover interface {
+	MoveAxis(a Axis, positive bool, rate Rate) error
+	StopAxis(a Axis) error
+}
+
+// TrackRater is implemented by mounts with selectable tracking rates. (Alpaca
+// TrackingRate; *Conn satisfies this via TrackSidereal/Lunar/Solar.)
+type TrackRater interface {
+	TrackSidereal() error
+	TrackLunar() error
+	TrackSolar() error
+}
+
+// SiteSetter is implemented by mounts that accept observing-site geometry.
+// (Alpaca SiteLatitude/SiteLongitude/SiteElevation — formats/signs are
+// mount-specific, hence per-mount, not in the core.)
+type SiteSetter interface {
+	SetSiteLatitude(deg float64) error
+	SetSiteLongitude(deg float64) error
+	SetSiteElevation(meters float64) error
+}
+
+// Clock is implemented by mounts that accept the UTC date/time. (Alpaca UTCDate.)
+type Clock interface {
+	SetUTC(t time.Time) error
+}
+
+// The core *Conn already satisfies these optional capabilities directly, so a
+// per-mount type that embeds it inherits them for free.
+var (
+	_ Horizontal = (*Conn)(nil)
+	_ Guider     = (*Conn)(nil)
+	_ AxisMover  = (*Conn)(nil)
+	_ TrackRater = (*Conn)(nil)
+)
