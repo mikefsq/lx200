@@ -37,6 +37,31 @@ func lastWrite(f *fakeMount) string {
 	return f.writes[len(f.writes)-1]
 }
 
+// TestFrame covers the passthrough framing: raw passes through verbatim; otherwise
+// a bare command gains the ':'…'#' it is missing, and an already-framed one is
+// left alone.
+func TestFrame(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		raw  bool
+		want string
+	}{
+		{"GR", false, ":GR#"},    // bare -> framed
+		{":GR", false, ":GR#"},   // missing trailing #
+		{"GR#", false, ":GR#"},   // missing leading :
+		{":GR#", false, ":GR#"},  // already framed
+		{"GR", true, "GR"},       // raw: verbatim
+		{":Sw3#", true, ":Sw3#"}, // raw: verbatim
+		{"", false, ""},          // empty: unchanged
+		{"", true, ""},           // empty: unchanged
+	}
+	for _, c := range cases {
+		if got := Frame(c.cmd, c.raw); got != c.want {
+			t.Errorf("Frame(%q, raw=%v) = %q, want %q", c.cmd, c.raw, got, c.want)
+		}
+	}
+}
+
 // TestCommandWireFormat verifies every command method emits the exact LX200
 // byte string and parses its reply correctly.
 func TestCommandWireFormat(t *testing.T) {

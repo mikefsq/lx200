@@ -7,6 +7,25 @@ import "fmt"
 // strings, site/time formats) diverge between mounts and belong in the per-mount
 // library, which uses the exported Blind/Ack/Get/Slew primitives directly.
 
+// Frame returns an LX200 command ready for the wire. With raw, cmd is returned
+// unchanged (the caller supplied a complete frame). Otherwise Frame adds the
+// framing a bare command omits — a leading ':' and a trailing '#'. It is the
+// decoration an ASCOM CommandBlind/CommandString/CommandBool passthrough applies to
+// a user-supplied command before handing it to Blind/Get/Ack. An empty command is
+// returned unchanged.
+func Frame(cmd string, raw bool) string {
+	if raw || cmd == "" {
+		return cmd
+	}
+	if cmd[0] != ':' {
+		cmd = ":" + cmd
+	}
+	if cmd[len(cmd)-1] != '#' {
+		cmd += "#"
+	}
+	return cmd
+}
+
 // --- Coordinate queries ---
 
 // RA returns the current right ascension in hours (:GR#).

@@ -50,18 +50,39 @@ func Open(portName string) (*Mount, error) {
 }
 
 // Find auto-detects the RST by its FTDI USB id (VID 0403 / PID 6001) and opens
-// the first match.
+// the first match. On macOS the cgo-free port enumerator reports no VID/PID (see
+// serial.PortInfo), so there Find falls back to the FTDI VCP name convention
+// (/dev/cu.usbserial-*) — less selective (any FTDI adapter matches), but it keeps
+// auto-detect working without pulling in the enumerator's macOS cgo path.
 func Find() (*Mount, error) {
 	ports, err := serial.List()
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range ports {
-		if p.IsUSB && p.VID == "0403" && p.PID == "6001" {
-			return Open(p.Name)
-		}
+	if name := findPort(ports); name != "" {
+		return Open(name)
 	}
 	return nil, fmt.Errorf("rainbow: no RST mount found (FTDI 0403:6001)")
+}
+
+// findPort picks the RST's serial port from an enumerated list: the exact FTDI USB
+// id (VID 0403 / PID 6001) when the VID is reported, else — only when no VID is
+// available (macOS) — the FTDI VCP name convention. The VID-empty guard keeps the
+// name fallback from claiming an unrelated FTDI adapter on platforms that do report
+// VIDs. Returns "" if nothing matches. Split out from Find so it is unit-testable
+// without enumerating or opening a real port.
+func findPort(ports []serial.PortInfo) string {
+	for _, p := range ports {
+		if p.IsUSB && p.VID == "0403" && p.PID == "6001" {
+			return p.Name
+		}
+	}
+	for _, p := range ports {
+		if p.VID == "" && p.IsUSB && strings.Contains(p.Name, "usbserial") {
+			return p.Name
+		}
+	}
+	return ""
 }
 
 // Version returns the firmware version (:AV#).

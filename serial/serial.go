@@ -5,6 +5,10 @@
 //
 // It lives in a subpackage so the core lx200 package stays dependency-free; a
 // TCP-only build (e.g. 10Micron) never pulls in the serial library.
+//
+// Only go.bug.st/serial's pure-Go paths are used, so the package builds for any
+// target with CGO_ENABLED=0 (the library's lone cgo path is its macOS USB
+// enumerator, which List avoids on darwin — see PortInfo / listPorts).
 package serial
 
 import (
@@ -13,7 +17,6 @@ import (
 
 	lx200 "github.com/mikefsq/lx200"
 	bugst "go.bug.st/serial"
-	"go.bug.st/serial/enumerator"
 )
 
 // ReadTimeout is the per-read timeout configured on the port. It must be set
@@ -42,32 +45,25 @@ func Open(portName string, baud int) (lx200.Transport, error) {
 	return port, nil
 }
 
-// PortInfo describes a discovered serial port (a thin view over the enumerator)
-// so per-mount libraries can auto-select their device by USB VID/PID/serial.
+// PortInfo describes a discovered serial port so per-mount libraries can
+// auto-select their device by USB VID/PID/serial.
+//
+// VID/PID/SerialNumber come from go.bug.st/serial's USB enumerator, which is pure
+// Go on every OS EXCEPT macOS, where it requires cgo (IOKit) and has no
+// CGO_ENABLED=0 build. To keep the library buildable for any target with cgo off
+// (including cross-compiling to darwin), List does not use the enumerator on macOS:
+// there the fields VID/PID/SerialNumber are empty and only Name (and a best-effort
+// IsUSB) is populated. A per-mount Find should therefore fall back to the device's
+// name convention when VID is unavailable (see rst.Find).
 type PortInfo struct {
 	Name         string // device path
 	IsUSB        bool
-	VID, PID     string // USB vendor/product IDs (hex, e.g. "0403"/"6001")
-	SerialNumber string
+	VID, PID     string // USB vendor/product IDs (hex, e.g. "0403"/"6001"); empty on macOS
+	SerialNumber string // empty on macOS
 }
 
-// List enumerates the serial ports with USB details, for auto-detection. The
-// per-mount library applies its own VID/PID/serial match (that logic is
-// device-specific, so it is not in this helper).
-func List() ([]PortInfo, error) {
-	ports, err := enumerator.GetDetailedPortsList()
-	if err != nil {
-		return nil, fmt.Errorf("lx200/serial: enumerate ports: %w", err)
-	}
-	out := make([]PortInfo, 0, len(ports))
-	for _, p := range ports {
-		out = append(out, PortInfo{
-			Name:         p.Name,
-			IsUSB:        p.IsUSB,
-			VID:          p.VID,
-			PID:          p.PID,
-			SerialNumber: p.SerialNumber,
-		})
-	}
-	return out, nil
-}
+// List enumerates the serial ports for auto-detection (implementation is per-OS:
+// the USB enumerator off macOS, name-only on macOS — see PortInfo). The per-mount
+// library applies its own VID/PID/name match (that logic is device-specific, so it
+// is not in this helper).
+func List() ([]PortInfo, error) { return listPorts() }

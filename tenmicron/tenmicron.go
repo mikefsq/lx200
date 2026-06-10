@@ -4,6 +4,11 @@
 // the 10Micron-specific status, tracking, park, site, and refraction/model
 // commands, satisfying lx200.Mount plus the Parker/PierSider/Horizontal/
 // SiteSetter/Clock optional capabilities.
+//
+// This file holds the core: the Mount type, connection, the :Ginfo# combined
+// status, and the lx200.Mount status-derived members. The rest of the protocol is
+// grouped by topic in sibling files (tracking.go, altaz.go, sitetime.go, dome.go,
+// focuser.go, …).
 package tenmicron
 
 import (
@@ -149,7 +154,7 @@ func parseGinfo(s string) (Status, error) {
 	return st, nil
 }
 
-// --- lx200.Mount (status members served from :Ginfo#) -----------------------
+// --- lx200.Mount members served from :Ginfo# --------------------------------
 
 func (m *Mount) RA() (float64, error)  { s, err := m.status(); return s.RA, err }
 func (m *Mount) Dec() (float64, error) { s, err := m.status(); return s.Dec, err }
@@ -157,18 +162,10 @@ func (m *Mount) Dec() (float64, error) { s, err := m.status(); return s.Dec, err
 func (m *Mount) Slewing() (bool, error)  { s, err := m.status(); return s.IsSlewing(), err }
 func (m *Mount) Tracking() (bool, error) { s, err := m.status(); return s.IsTracking(), err }
 
-// SetTracking starts (:AP#) or stops (:AL#) tracking. Both reply nothing.
-func (m *Mount) SetTracking(on bool) error {
-	cmd := ":AL#"
-	if on {
-		cmd = ":AP#"
-	}
-	if err := m.Blind(cmd); err != nil {
-		return err
-	}
-	m.invalidate()
-	return nil
-}
+// PierSider / Horizontal — straight from :Ginfo#.
+func (m *Mount) PierSide() (lx200.PierSide, error) { s, err := m.status(); return s.Pier, err }
+func (m *Mount) Altitude() (float64, error)        { s, err := m.status(); return s.Alt, err }
+func (m *Mount) Azimuth() (float64, error)         { s, err := m.status(); return s.Az, err }
 
 // SlewToTarget / SyncToTarget override the core only to invalidate the cache.
 func (m *Mount) SlewToTarget() error {
@@ -197,124 +194,7 @@ func (m *Mount) Halt() error {
 	return nil
 }
 
-// --- Optional capabilities --------------------------------------------------
-
-// Parker (:KA# / :PO#, no reply; AtPark from :Ginfo Gstat).
-func (m *Mount) Park() error {
-	if err := m.Blind(":KA#"); err != nil {
-		return err
-	}
-	m.invalidate()
-	return nil
-}
-
-func (m *Mount) Unpark() error {
-	if err := m.Blind(":PO#"); err != nil {
-		return err
-	}
-	m.invalidate()
-	return nil
-}
-
-func (m *Mount) AtPark() (bool, error) { s, err := m.status(); return s.IsParked(), err }
-
-// PierSider / Horizontal — straight from :Ginfo#.
-func (m *Mount) PierSide() (lx200.PierSide, error) { s, err := m.status(); return s.Pier, err }
-func (m *Mount) Altitude() (float64, error)        { s, err := m.status(); return s.Alt, err }
-func (m *Mount) Azimuth() (float64, error)         { s, err := m.status(); return s.Az, err }
-
-// SiteSetter — 10Micron formats; longitude is East-negative (Alpaca is East-positive).
-func (m *Mount) SetSiteLatitude(deg float64) error {
-	return must(m.Ack(":St" + dms(deg, 2) + "#"))
-}
-
-func (m *Mount) SetSiteLongitude(deg float64) error {
-	return must(m.Ack(":Sg" + dms(-deg, 3) + "#")) // negate: 10Micron East = negative
-}
-
-func (m *Mount) SetSiteElevation(meters float64) error {
-	return must(m.Ack(fmt.Sprintf(":Sev%+07.1f#", meters)))
-}
-
-// Clock — set combined UTC date+time (:SUDT...#).
-func (m *Mount) SetUTC(t time.Time) error {
-	return must(m.Ack(t.UTC().Format(":SUDT2006-01-02,15:04:05#")))
-}
-
-// SetUTCOffset sets the offset added to local time to yield UTC (:SG). Use a
-// zero offset — the mount's default working mode — so its local clock equals
-// UTC and SetDate/SetTime below operate directly in UTC.
-func (m *Mount) SetUTCOffset(offset time.Duration) error {
-	sign := byte('+')
-	if offset < 0 {
-		sign, offset = '-', -offset
-	}
-	s := int(offset / time.Second)
-	return must(m.Ack(fmt.Sprintf(":SG%c%02d:%02d:%02d#", sign, s/3600, (s/60)%60, s%60)))
-}
-
-// SetDate sets the mount's date (:SC), which the protocol expresses in local
-// time; with a zero UTC offset this is the UTC date. t is read in UTC. In the
-// :U2# ultra-precision mode set at Connect, :SC replies a bare "1" (no
-// "Updating Planetary Data" tail), so the 1-byte ack is safe.
-func (m *Mount) SetDate(t time.Time) error {
-	return must(m.Ack(t.UTC().Format(":SC2006-01-02#")))
-}
-
-// SetTime sets the mount's local time (:SL); with a zero UTC offset this is the
-// UTC time. t is read in UTC.
-func (m *Mount) SetTime(t time.Time) error {
-	return must(m.Ack(t.UTC().Format(":SL15:04:05#")))
-}
-
-// --- 10Micron vendor commands (exposed by the Alpaca wrapper as Actions) ----
-
-// Product returns the mount product name (:GVP#).
-func (m *Mount) Product() (string, error) { return m.Get(":GVP#") }
-
-// SetRefraction sets the refraction-model pressure (hPa) and temperature (°C).
-func (m *Mount) SetRefraction(pressureHPa, tempC float64) error {
-	if err := must(m.Ack(fmt.Sprintf(":SRPRS%06.1f#", pressureHPa))); err != nil {
-		return err
-	}
-	return must(m.Ack(fmt.Sprintf(":SRTMP%+06.1f#", tempC)))
-}
-
-// Refraction reads the refraction-model pressure (hPa) and temperature (°C).
-func (m *Mount) Refraction() (pressureHPa, tempC float64, err error) {
-	ps, err := m.Get(":GRPRS#")
-	if err != nil {
-		return 0, 0, err
-	}
-	ts, err := m.Get(":GRTMP#")
-	if err != nil {
-		return 0, 0, err
-	}
-	pressureHPa, _ = strconv.ParseFloat(strings.TrimSpace(ps), 64)
-	tempC, _ = strconv.ParseFloat(strings.TrimSpace(ts), 64)
-	return pressureHPa, tempC, nil
-}
-
-// SetUnattendedFlip enables/disables the unattended meridian flip (:Suaf, no reply).
-func (m *Mount) SetUnattendedFlip(on bool) error {
-	return m.Blind(fmt.Sprintf(":Suaf%d#", b2i(on)))
-}
-
-// SetDualAxisTracking enables/disables dual-axis tracking (:Sdat, replies 0/1).
-func (m *Mount) SetDualAxisTracking(on bool) error {
-	return must(m.Ack(fmt.Sprintf(":Sdat%d#", b2i(on))))
-}
-
-// Flip performs a meridian/azimuth flip (:FLIP#, replies 1 ok / 0 cannot).
-func (m *Mount) Flip() error {
-	if err := must(m.Ack(":FLIP#")); err != nil {
-		return err
-	}
-	m.invalidate()
-	return nil
-}
-
-// --- helpers ----------------------------------------------------------------
+// --- shared helpers ---------------------------------------------------------
 
 // must turns an LX200 set-command ack into an error.
 func must(ok bool, err error) error {
@@ -350,6 +230,7 @@ func dms(deg float64, degWidth int) string {
 var (
 	_ lx200.Mount      = (*Mount)(nil)
 	_ lx200.Parker     = (*Mount)(nil)
+	_ lx200.Homer      = (*Mount)(nil)
 	_ lx200.PierSider  = (*Mount)(nil)
 	_ lx200.Horizontal = (*Mount)(nil)
 	_ lx200.SiteSetter = (*Mount)(nil)

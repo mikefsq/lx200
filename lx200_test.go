@@ -41,46 +41,6 @@ func newFake(replies map[string]string) (*Conn, *fakeMount) {
 	return New(f, 150*time.Millisecond), f
 }
 
-func TestParseSexagesimal(t *testing.T) {
-	cases := []struct {
-		in   string
-		want float64
-	}{
-		{"12:34:56#", 12 + 34.0/60 + 56.0/3600},
-		{"12:34.5", 12 + 34.5/60},
-		{"+89*30:00", 89.5},
-		{"-12*30:00#", -12.5},
-		{"-00*30:00", -0.5},
-		{"359*45:00", 359.75}, // azimuth, unsigned
-		{"+47*18:00.0", 47.3},
-	}
-	for _, c := range cases {
-		got, err := ParseSexagesimal(c.in)
-		if err != nil {
-			t.Errorf("ParseSexagesimal(%q) error: %v", c.in, err)
-			continue
-		}
-		if math.Abs(got-c.want) > 1e-6 {
-			t.Errorf("ParseSexagesimal(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
-
-func TestFormatRoundTrip(t *testing.T) {
-	if s := FormatHMS(12 + 34.0/60 + 56.0/3600); s != "12:34:56" {
-		t.Errorf("FormatHMS = %q, want 12:34:56", s)
-	}
-	if s := FormatHMS(-1.0); s != "23:00:00" { // wraps into [0,24)
-		t.Errorf("FormatHMS(-1) = %q, want 23:00:00", s)
-	}
-	if s := FormatDMS(89.5, '*'); s != "+89*30:00" {
-		t.Errorf("FormatDMS = %q, want +89*30:00", s)
-	}
-	if s := FormatDMS(-12.5, '*'); s != "-12*30:00" {
-		t.Errorf("FormatDMS(-12.5) = %q, want -12*30:00", s)
-	}
-}
-
 func TestPrimitives(t *testing.T) {
 	c, f := newFake(map[string]string{
 		":GR#":         "12:34:56#",

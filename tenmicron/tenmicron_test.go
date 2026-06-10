@@ -5,42 +5,12 @@ import (
 	"time"
 
 	"github.com/mikefsq/lx200"
+	"github.com/mikefsq/lx200/internal/lx200test"
 )
 
-// fake is an in-memory lx200.Transport: each command queues its scripted reply.
-type fake struct {
-	replies map[string]string
-	writes  []string
-	rbuf    []byte
-}
-
-func (f *fake) Write(p []byte) (int, error) {
-	f.writes = append(f.writes, string(p))
-	if r, ok := f.replies[string(p)]; ok {
-		f.rbuf = append(f.rbuf, []byte(r)...)
-	}
-	return len(p), nil
-}
-func (f *fake) Read(p []byte) (int, error) {
-	if len(f.rbuf) == 0 {
-		return 0, nil
-	}
-	n := copy(p, f.rbuf)
-	f.rbuf = f.rbuf[n:]
-	return n, nil
-}
-func (f *fake) Close() error { return nil }
-
-func newMount(replies map[string]string) (*Mount, *fake) {
-	f := &fake{replies: replies}
+func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
+	f := lx200test.New(replies)
 	return &Mount{Conn: lx200.New(f, 200*time.Millisecond)}, f
-}
-
-func lastWrite(f *fake) string {
-	if len(f.writes) == 0 {
-		return ""
-	}
-	return f.writes[len(f.writes)-1]
 }
 
 func TestParseGinfo(t *testing.T) {
@@ -110,13 +80,7 @@ func TestStatusServedFromGinfo(t *testing.T) {
 		t.Errorf("PierSide = %v, want East", ps)
 	}
 	// The burst above must have hit :Ginfo# only once (cache TTL).
-	n := 0
-	for _, w := range f.writes {
-		if w == ":Ginfo#" {
-			n++
-		}
-	}
-	if n != 1 {
+	if n := f.Count(":Ginfo#"); n != 1 {
 		t.Errorf(":Ginfo# sent %d times, want 1 (cache coalescing)", n)
 	}
 }
@@ -129,23 +93,23 @@ func TestTrackingAndSiteCommands(t *testing.T) {
 		":Sdat1#":        "1",
 	})
 
-	if err := m.SetTracking(true); err != nil || lastWrite(f) != ":AP#" {
-		t.Errorf("SetTracking(true): %v wrote %q", err, lastWrite(f))
+	if err := m.SetTracking(true); err != nil || f.LastWrite() != ":AP#" {
+		t.Errorf("SetTracking(true): %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetTracking(false); err != nil || lastWrite(f) != ":AL#" {
-		t.Errorf("SetTracking(false): %v wrote %q", err, lastWrite(f))
+	if err := m.SetTracking(false); err != nil || f.LastWrite() != ":AL#" {
+		t.Errorf("SetTracking(false): %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetSiteLatitude(45.5); err != nil || lastWrite(f) != ":St+45*30:00#" {
-		t.Errorf("SetSiteLatitude: %v wrote %q", err, lastWrite(f))
+	if err := m.SetSiteLatitude(45.5); err != nil || f.LastWrite() != ":St+45*30:00#" {
+		t.Errorf("SetSiteLatitude: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetSiteLongitude(123.5); err != nil || lastWrite(f) != ":Sg-123*30:00#" {
-		t.Errorf("SetSiteLongitude: %v wrote %q", err, lastWrite(f))
+	if err := m.SetSiteLongitude(123.5); err != nil || f.LastWrite() != ":Sg-123*30:00#" {
+		t.Errorf("SetSiteLongitude: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetSiteElevation(100); err != nil || lastWrite(f) != ":Sev+0100.0#" {
-		t.Errorf("SetSiteElevation: %v wrote %q", err, lastWrite(f))
+	if err := m.SetSiteElevation(100); err != nil || f.LastWrite() != ":Sev+0100.0#" {
+		t.Errorf("SetSiteElevation: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetDualAxisTracking(true); err != nil || lastWrite(f) != ":Sdat1#" {
-		t.Errorf("SetDualAxisTracking: %v wrote %q", err, lastWrite(f))
+	if err := m.SetDualAxisTracking(true); err != nil || f.LastWrite() != ":Sdat1#" {
+		t.Errorf("SetDualAxisTracking: %v wrote %q", err, f.LastWrite())
 	}
 }
 
@@ -158,20 +122,20 @@ func TestDateTimeSetters(t *testing.T) {
 		":SL15:04:05#":              "1",
 	})
 	tm := time.Date(2026, 6, 2, 15, 4, 5, 0, time.UTC)
-	if err := m.SetUTC(tm); err != nil || lastWrite(f) != ":SUDT2026-06-02,15:04:05#" {
-		t.Errorf("SetUTC: %v wrote %q", err, lastWrite(f))
+	if err := m.SetUTC(tm); err != nil || f.LastWrite() != ":SUDT2026-06-02,15:04:05#" {
+		t.Errorf("SetUTC: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetUTCOffset(0); err != nil || lastWrite(f) != ":SG+00:00:00#" {
-		t.Errorf("SetUTCOffset(0): %v wrote %q", err, lastWrite(f))
+	if err := m.SetUTCOffset(0); err != nil || f.LastWrite() != ":SG+00:00:00#" {
+		t.Errorf("SetUTCOffset(0): %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetUTCOffset(-5*time.Hour - 30*time.Minute); err != nil || lastWrite(f) != ":SG-05:30:00#" {
-		t.Errorf("SetUTCOffset(-5:30): %v wrote %q", err, lastWrite(f))
+	if err := m.SetUTCOffset(-5*time.Hour - 30*time.Minute); err != nil || f.LastWrite() != ":SG-05:30:00#" {
+		t.Errorf("SetUTCOffset(-5:30): %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetDate(tm); err != nil || lastWrite(f) != ":SC2026-06-02#" {
-		t.Errorf("SetDate: %v wrote %q", err, lastWrite(f))
+	if err := m.SetDate(tm); err != nil || f.LastWrite() != ":SC2026-06-02#" {
+		t.Errorf("SetDate: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetTime(tm); err != nil || lastWrite(f) != ":SL15:04:05#" {
-		t.Errorf("SetTime: %v wrote %q", err, lastWrite(f))
+	if err := m.SetTime(tm); err != nil || f.LastWrite() != ":SL15:04:05#" {
+		t.Errorf("SetTime: %v wrote %q", err, f.LastWrite())
 	}
 }
 
@@ -184,9 +148,9 @@ func TestHaltInvalidatesCache(t *testing.T) {
 	if sl, err := m.Slewing(); err != nil || !sl {
 		t.Fatalf("Slewing = %v, %v; want true", sl, err)
 	}
-	f.replies[":Ginfo#"] = "6.0,30.0,E,90.0,45.0,2459580.5,1,0#" // now stopped
-	if err := m.Halt(); err != nil || lastWrite(f) != ":Q#" {
-		t.Fatalf("Halt: %v wrote %q", err, lastWrite(f))
+	f.SetReply(":Ginfo#", "6.0,30.0,E,90.0,45.0,2459580.5,1,0#") // now stopped
+	if err := m.Halt(); err != nil || f.LastWrite() != ":Q#" {
+		t.Fatalf("Halt: %v wrote %q", err, f.LastWrite())
 	}
 	if sl, err := m.Slewing(); err != nil || sl {
 		t.Errorf("Slewing after Halt = %v, %v; want false (cache invalidated)", sl, err)

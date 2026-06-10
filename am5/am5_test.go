@@ -5,33 +5,11 @@ import (
 	"time"
 
 	"github.com/mikefsq/lx200"
+	"github.com/mikefsq/lx200/internal/lx200test"
 )
 
-type fake struct {
-	replies map[string]string
-	writes  []string
-	rbuf    []byte
-}
-
-func (f *fake) Write(p []byte) (int, error) {
-	f.writes = append(f.writes, string(p))
-	if r, ok := f.replies[string(p)]; ok {
-		f.rbuf = append(f.rbuf, []byte(r)...)
-	}
-	return len(p), nil
-}
-func (f *fake) Read(p []byte) (int, error) {
-	if len(f.rbuf) == 0 {
-		return 0, nil
-	}
-	n := copy(p, f.rbuf)
-	f.rbuf = f.rbuf[n:]
-	return n, nil
-}
-func (f *fake) Close() error { return nil }
-
-func newMount(replies map[string]string) (*Mount, *fake) {
-	f := &fake{replies: replies}
+func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
+	f := lx200test.New(replies)
 	return &Mount{Conn: lx200.New(f, 200*time.Millisecond)}, f
 }
 
@@ -47,16 +25,7 @@ func TestStatusIdleTracking(t *testing.T) {
 		t.Errorf("MountMode = %v, want Equatorial ('G')", mode)
 	}
 	// Burst coalesced: one :GU# + one :GAT#.
-	gu, gat := 0, 0
-	for _, w := range f.writes {
-		switch w {
-		case ":GU#":
-			gu++
-		case ":GAT#":
-			gat++
-		}
-	}
-	if gu != 1 || gat != 1 {
+	if gu, gat := f.Count(":GU#"), f.Count(":GAT#"); gu != 1 || gat != 1 {
 		t.Errorf("status round-trips: GU=%d GAT=%d, want 1/1", gu, gat)
 	}
 }
@@ -76,11 +45,11 @@ func TestStatusSlewingAndHome(t *testing.T) {
 
 func TestTrackingCommands(t *testing.T) {
 	m, f := newMount(map[string]string{":Te#": "1", ":Td#": "1"})
-	if err := m.SetTracking(true); err != nil || f.writes[len(f.writes)-1] != ":Te#" {
-		t.Errorf("SetTracking(true): %v wrote %q", err, f.writes[len(f.writes)-1])
+	if err := m.SetTracking(true); err != nil || f.LastWrite() != ":Te#" {
+		t.Errorf("SetTracking(true): %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetTracking(false); err != nil || f.writes[len(f.writes)-1] != ":Td#" {
-		t.Errorf("SetTracking(false): %v wrote %q", err, f.writes[len(f.writes)-1])
+	if err := m.SetTracking(false); err != nil || f.LastWrite() != ":Td#" {
+		t.Errorf("SetTracking(false): %v wrote %q", err, f.LastWrite())
 	}
 }
 
@@ -92,16 +61,16 @@ func TestNumberedRateOverride(t *testing.T) {
 	if err := m.SetRate(lx200.RateMax); err != nil {
 		t.Fatalf("SetRate: %v", err)
 	}
-	if got := f.writes[len(f.writes)-1]; got != ":R9#" {
+	if got := f.LastWrite(); got != ":R9#" {
 		t.Errorf("SetRate(Max) wrote %q, want :R9# (not the core :RS#)", got)
 	}
 
-	f.writes = nil
+	f.Reset()
 	if err := m.MoveAxis(lx200.AxisPrimary, true, lx200.RateGuide); err != nil {
 		t.Fatalf("MoveAxis: %v", err)
 	}
-	if len(f.writes) != 2 || f.writes[0] != ":R0#" || f.writes[1] != ":Me#" {
-		t.Errorf("MoveAxis wrote %v, want [:R0# :Me#] (AM5 rate, not :RG#)", f.writes)
+	if w := f.Writes(); len(w) != 2 || w[0] != ":R0#" || w[1] != ":Me#" {
+		t.Errorf("MoveAxis wrote %v, want [:R0# :Me#] (AM5 rate, not :RG#)", w)
 	}
 }
 
@@ -110,7 +79,7 @@ func TestSiteLongitudeReversed(t *testing.T) {
 	if err := m.SetSiteLongitude(123.5); err != nil { // East-positive -> Meade East-negative
 		t.Errorf("SetSiteLongitude: %v", err)
 	}
-	if got := f.writes[len(f.writes)-1]; got != ":Sg-123*30:00#" {
+	if got := f.LastWrite(); got != ":Sg-123*30:00#" {
 		t.Errorf("SetSiteLongitude wrote %q, want :Sg-123*30:00#", got)
 	}
 	if err := m.SetSiteLatitude(45.5); err != nil {
@@ -134,8 +103,8 @@ func TestSetUTC(t *testing.T) {
 		if err := m.SetUTC(c.t); err != nil {
 			t.Fatalf("SetUTC(%v): %v", c.t, err)
 		}
-		if len(f.writes) != 2 || f.writes[0] != c.wantSG || f.writes[1] != c.wantSC {
-			t.Errorf("SetUTC(%v) wrote %v, want [%s %s] (no :SL)", c.t, f.writes, c.wantSG, c.wantSC)
+		if w := f.Writes(); len(w) != 2 || w[0] != c.wantSG || w[1] != c.wantSC {
+			t.Errorf("SetUTC(%v) wrote %v, want [%s %s] (no :SL)", c.t, w, c.wantSG, c.wantSC)
 		}
 	}
 }
@@ -146,15 +115,15 @@ func TestElevationNoop(t *testing.T) {
 	if err := m.SetSiteElevation(1234); err != nil {
 		t.Errorf("SetSiteElevation: %v", err)
 	}
-	if len(f.writes) != 0 {
-		t.Errorf("SetSiteElevation sent %v; INDI sends nothing", f.writes)
+	if w := f.Writes(); len(w) != 0 {
+		t.Errorf("SetSiteElevation sent %v; INDI sends nothing", w)
 	}
 }
 
 func TestSetHomeAndBuzzer(t *testing.T) {
 	m, f := newMount(map[string]string{":SOa#": "1", ":GBu#": "2#"})
-	if err := m.SetHome(); err != nil || f.writes[len(f.writes)-1] != ":SOa#" {
-		t.Errorf("SetHome: %v wrote %q", err, f.writes[len(f.writes)-1])
+	if err := m.SetHome(); err != nil || f.LastWrite() != ":SOa#" {
+		t.Errorf("SetHome: %v wrote %q", err, f.LastWrite())
 	}
 	if v, err := m.Buzzer(); err != nil || v != 2 {
 		t.Errorf("Buzzer = %v, %v; want 2", v, err)
@@ -170,7 +139,7 @@ func TestMeridianFlip(t *testing.T) {
 	if err := m.SetMeridianFlip(MeridianFlip{Enabled: true, TrackPast: false, LimitDeg: -10}); err != nil {
 		t.Errorf("SetMeridianFlip: %v", err)
 	}
-	if got := f.writes[len(f.writes)-1]; got != ":STa10-10#" {
+	if got := f.LastWrite(); got != ":STa10-10#" {
 		t.Errorf("SetMeridianFlip wrote %q, want :STa10-10#", got)
 	}
 }

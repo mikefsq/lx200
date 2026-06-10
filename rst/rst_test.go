@@ -2,53 +2,17 @@ package rst
 
 import (
 	"math"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mikefsq/lx200"
+	"github.com/mikefsq/lx200/internal/lx200test"
+	"github.com/mikefsq/lx200/serial"
 )
 
-type fake struct {
-	mu      sync.Mutex // PulseGuide's stop goroutine writes concurrently
-	replies map[string]string
-	writes  []string
-	rbuf    []byte
-}
-
-func (f *fake) Write(p []byte) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.writes = append(f.writes, string(p))
-	if r, ok := f.replies[string(p)]; ok {
-		f.rbuf = append(f.rbuf, []byte(r)...)
-	}
-	return len(p), nil
-}
-func (f *fake) Read(p []byte) (int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.rbuf) == 0 {
-		return 0, nil
-	}
-	n := copy(p, f.rbuf)
-	f.rbuf = f.rbuf[n:]
-	return n, nil
-}
-func (f *fake) Close() error { return nil }
-
-func newMount(replies map[string]string) (*Mount, *fake) {
-	f := &fake{replies: replies}
+func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
+	f := lx200test.New(replies)
 	return &Mount{Conn: lx200.New(f, 200*time.Millisecond)}, f
-}
-
-func last(f *fake) string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.writes) == 0 {
-		return ""
-	}
-	return f.writes[len(f.writes)-1]
 }
 
 // TestCoordPrefixAndSign is the key regression: RST replies echo the command
@@ -82,15 +46,15 @@ func TestTracking(t *testing.T) {
 // TestSlewingViaToken exercises the unsolicited completion-token model.
 func TestSlewingViaToken(t *testing.T) {
 	m, f := newMount(map[string]string{}) // :MS# has no immediate reply
-	if err := m.SlewToTarget(); err != nil || last(f) != ":MS#" {
-		t.Fatalf("SlewToTarget: %v wrote %q", err, last(f))
+	if err := m.SlewToTarget(); err != nil || f.LastWrite() != ":MS#" {
+		t.Fatalf("SlewToTarget: %v wrote %q", err, f.LastWrite())
 	}
 	// No token yet -> still slewing.
 	if sl, _ := m.Slewing(); !sl {
 		t.Errorf("Slewing = false before token, want true")
 	}
 	// Mount pushes the completion token; next poll drains it.
-	f.rbuf = append(f.rbuf, []byte(":MM0#")...)
+	f.Push(":MM0#")
 	time.Sleep(peekTTL) // allow the next peek (coalescing window)
 	if sl, _ := m.Slewing(); sl {
 		t.Errorf("Slewing = true after :MM0# token, want false")
@@ -107,7 +71,7 @@ func TestSyncBuildsCk(t *testing.T) {
 	if _, err := m.SyncToTarget(); err != nil {
 		t.Fatalf("SyncToTarget: %v", err)
 	}
-	if got := last(f); got != ":Ck307.500-52.000#" {
+	if got := f.LastWrite(); got != ":Ck307.500-52.000#" {
 		t.Errorf("Sync wrote %q, want :Ck307.500-52.000#", got)
 	}
 }
@@ -117,11 +81,11 @@ func TestSiteFormat(t *testing.T) {
 		":St+37*30*00#":  "1",
 		":Sg+122*30*00#": "1",
 	})
-	if err := m.SetSiteLatitude(37.5); err != nil || last(f) != ":St+37*30*00#" {
-		t.Errorf("SetSiteLatitude: %v wrote %q", err, last(f))
+	if err := m.SetSiteLatitude(37.5); err != nil || f.LastWrite() != ":St+37*30*00#" {
+		t.Errorf("SetSiteLatitude: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetSiteLongitude(-122.5); err != nil || last(f) != ":Sg+122*30*00#" {
-		t.Errorf("SetSiteLongitude(-122.5) wrote %q, want :Sg+122*30*00# (East-negative)", last(f))
+	if err := m.SetSiteLongitude(-122.5); err != nil || f.LastWrite() != ":Sg+122*30*00#" {
+		t.Errorf("SetSiteLongitude(-122.5) wrote %q, want :Sg+122*30*00# (East-negative)", f.LastWrite())
 	}
 }
 
@@ -136,7 +100,7 @@ func TestAddAlignmentPoint(t *testing.T) {
 	if err := m.AddAlignmentPoint(); err != nil {
 		t.Fatalf("AddAlignmentPoint: %v", err)
 	}
-	if got := last(f); got != ":CN307.500-52.000#" {
+	if got := f.LastWrite(); got != ":CN307.500-52.000#" {
 		t.Errorf("AddAlignmentPoint wrote %q, want :CN307.500-52.000#", got)
 	}
 }
@@ -184,7 +148,7 @@ func TestPulseGuideStop(t *testing.T) {
 		t.Fatalf("PulseGuide: %v", err)
 	}
 	time.Sleep(60 * time.Millisecond) // let the stop goroutine fire
-	if got := last(f); got != ":Q#" {
+	if got := f.LastWrite(); got != ":Q#" {
 		t.Errorf("PulseGuide stop wrote %q, want :Q#", got)
 	}
 	if m.IsPulseGuiding() {
@@ -195,8 +159,69 @@ func TestPulseGuideStop(t *testing.T) {
 // TestStopAxis: RST's per-axis stop collapses to the bare :Q#.
 func TestStopAxis(t *testing.T) {
 	m, f := newMount(nil)
-	if err := m.StopAxis(lx200.AxisPrimary); err != nil || last(f) != ":Q#" {
-		t.Errorf("StopAxis wrote %q, %v; want :Q#", last(f), err)
+	if err := m.StopAxis(lx200.AxisPrimary); err != nil || f.LastWrite() != ":Q#" {
+		t.Errorf("StopAxis wrote %q, %v; want :Q#", f.LastWrite(), err)
+	}
+}
+
+// TestFindPort covers the port-selection logic for both enumeration regimes: the
+// exact FTDI VID/PID match (linux/windows/BSD) and the macOS name fallback, which
+// must fire ONLY when no VID is reported.
+func TestFindPort(t *testing.T) {
+	cases := []struct {
+		name  string
+		ports []serial.PortInfo
+		want  string
+	}{
+		{
+			name: "exact FTDI VID/PID match",
+			ports: []serial.PortInfo{
+				{Name: "/dev/ttyUSB0", IsUSB: true, VID: "1234", PID: "5678"},
+				{Name: "/dev/ttyUSB1", IsUSB: true, VID: "0403", PID: "6001"},
+			},
+			want: "/dev/ttyUSB1",
+		},
+		{
+			name: "VID present but wrong PID is not claimed by the name fallback",
+			ports: []serial.PortInfo{
+				{Name: "/dev/cu.usbserial-A1", IsUSB: true, VID: "0403", PID: "6015"},
+			},
+			want: "",
+		},
+		{
+			name: "macOS: no VID, FTDI VCP name matches",
+			ports: []serial.PortInfo{
+				{Name: "/dev/cu.usbserial-1410", IsUSB: true},
+			},
+			want: "/dev/cu.usbserial-1410",
+		},
+		{
+			name: "macOS: no VID, non-FTDI name (usbmodem) does not match",
+			ports: []serial.PortInfo{
+				{Name: "/dev/cu.usbmodem1411", IsUSB: true},
+			},
+			want: "",
+		},
+		{
+			name: "exact match wins over a name-only candidate",
+			ports: []serial.PortInfo{
+				{Name: "/dev/cu.usbserial-novid", IsUSB: true},
+				{Name: "/dev/cu.usbserial-rst", IsUSB: true, VID: "0403", PID: "6001"},
+			},
+			want: "/dev/cu.usbserial-rst",
+		},
+		{
+			name:  "empty list",
+			ports: nil,
+			want:  "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := findPort(c.ports); got != c.want {
+				t.Errorf("findPort = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
@@ -205,11 +230,11 @@ func TestTrackRatesAndPark(t *testing.T) {
 		":Sz180*00'00.0\"#": "1",
 		":Sa+00*00'00.0\"#": "1",
 	})
-	if err := m.TrackSidereal(); err != nil || last(f) != ":CtR#" {
-		t.Errorf("TrackSidereal wrote %q, want :CtR#", last(f))
+	if err := m.TrackSidereal(); err != nil || f.LastWrite() != ":CtR#" {
+		t.Errorf("TrackSidereal wrote %q, want :CtR#", f.LastWrite())
 	}
-	if err := m.Park(); err != nil || last(f) != ":MA#" {
-		t.Errorf("Park: %v final write %q, want :MA#", err, last(f))
+	if err := m.Park(); err != nil || f.LastWrite() != ":MA#" {
+		t.Errorf("Park: %v final write %q, want :MA#", err, f.LastWrite())
 	}
 	if p, _ := m.AtPark(); !p {
 		t.Errorf("AtPark = false after Park")
