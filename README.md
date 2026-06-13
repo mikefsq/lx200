@@ -22,11 +22,16 @@ lx200/
 ├── tenmicron/        10Micron GM-series      (TCP)
 ├── am5/              ZWO AM3/AM5/AM5N/AM7     (USB-serial or WiFi/TCP)
 ├── rst/              Rainbow Astro RST-135/300 (USB-serial)
-└── onstep/           OnStep / OnStepX        (USB-serial or WiFi/TCP)
+├── onstep/           OnStep / OnStepX        (USB-serial or WiFi/TCP)
+└── bridge/           LX200 TCP *server* — the protocol inverse: serves a Mount
+                      to Stellarium / SkySafari (see bridge/README.md)
 ```
 
-Each per-mount package embeds the core `*lx200.Conn` for the common command set
-and adds only its vendor-specific status, tracking, park, and site commands.
+The per-mount packages are LX200 **clients** (they speak `:CMD#` *to* a mount),
+each embedding the core `*lx200.Conn` and adding only its vendor-specific status,
+tracking, park, and site commands. `bridge/` is the **server** direction: it
+*answers* `:CMD#` for an atlas, fronting any `lx200.Mount` — a sibling consumer of
+the mount alongside the Alpaca Telescope wrapper, never a layer over it.
 
 ## Design
 

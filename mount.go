@@ -73,6 +73,15 @@ type Guider interface {
 	PulseGuide(d Direction, ms int) error
 }
 
+// GuideRater is implemented by mounts that can report their pulse-guide rate as a
+// fraction of the sidereal rate — the unit INDI's GUIDE_RATE and PHD2 expect.
+// Mounts whose protocol gives the rate in arcsec/s convert it here (sidereal is
+// ~15.041"/s); mounts that cannot report a rate simply do not implement it. The core
+// *Conn does NOT satisfy this — it is per-mount, since the command and units differ.
+type GuideRater interface {
+	GuideRateSidereal() (float64, error)
+}
+
 // AxisMover is implemented by mounts supporting continuous per-axis slews.
 // (Alpaca MoveAxis; *Conn satisfies this via MoveAxis/StopAxis.)
 type AxisMover interface {
@@ -102,6 +111,16 @@ type Clock interface {
 	SetUTC(t time.Time) error
 }
 
+// OpLocker is implemented by mounts that can serialize a multi-command logical
+// operation (a goto or sync — set-target then act) against other such operations,
+// so independent front-ends sharing one mount (the Alpaca wrapper and the LX200
+// bridge) cannot interleave their :Sr/:Sd/:MS# sequences and corrupt the device's
+// single target register. *Conn satisfies it via OpLock; a front-end type-asserts
+// for it and skips the outer lock when absent.
+type OpLocker interface {
+	OpLock() func()
+}
+
 // The core *Conn already satisfies these optional capabilities directly, so a
 // per-mount type that embeds it inherits them for free.
 var (
@@ -109,4 +128,5 @@ var (
 	_ Guider     = (*Conn)(nil)
 	_ AxisMover  = (*Conn)(nil)
 	_ TrackRater = (*Conn)(nil)
+	_ OpLocker   = (*Conn)(nil)
 )

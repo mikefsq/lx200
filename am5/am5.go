@@ -325,6 +325,10 @@ func (m *Mount) GuideRate() (float64, error) {
 	return v, nil
 }
 
+// GuideRateSidereal returns the guide rate as a fraction of sidereal (the lx200
+// GuideRater contract). ZWO AM mounts already express it that way, so this is GuideRate.
+func (m *Mount) GuideRateSidereal() (float64, error) { return m.GuideRate() }
+
 // SetVariableSlewRate sets a continuous slew speed in ×sidereal (0–1440), :Rv.
 func (m *Mount) SetVariableSlewRate(x float64) error { return m.Blind(fmt.Sprintf(":Rv%.2f#", x)) }
 

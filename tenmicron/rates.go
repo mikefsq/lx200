@@ -32,6 +32,20 @@ func (m *Mount) MaxSlewRate() (float64, error) { return m.getFloat(":GMsb#") }
 // GuideRate returns the current guide rate in arcsec/s (:Ggui#).
 func (m *Mount) GuideRate() (float64, error) { return m.getFloat(":Ggui#") }
 
+// siderealArcsecPerSec is the mean sidereal rate (15.041"/s); the guide rate is a
+// fraction of it.
+const siderealArcsecPerSec = 15.041
+
+// GuideRateSidereal returns the guide rate as a fraction of sidereal (the lx200
+// GuideRater contract / INDI's unit), converting from the mount's arcsec/s.
+func (m *Mount) GuideRateSidereal() (float64, error) {
+	r, err := m.GuideRate()
+	if err != nil {
+		return 0, err
+	}
+	return r / siderealArcsecPerSec, nil
+}
+
 // SetGuideRate sets the guide rate in arcsec/s (:RgSS.S#); must not exceed the
 // sidereal rate (~15.041"/s). It is applied to the :Me/:Mw/:Mn/:Ms guide moves
 // once guiding rate is selected.

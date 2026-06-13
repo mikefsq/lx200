@@ -42,6 +42,7 @@ type Conn struct {
 	t       Transport
 	timeout time.Duration
 	mu      sync.Mutex
+	opMu    sync.Mutex // serializes multi-command logical operations (see OpLock)
 }
 
 // New wraps an open transport. A zero timeout uses DefaultTimeout.
@@ -71,6 +72,27 @@ func (c *Conn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.t.Close()
+}
+
+// OpLock serializes a multi-command logical operation — a goto or sync, which is
+// the :Sr→:Sd→:MS# (or :CM#) set-target-then-act sequence — against other such
+// operations on this mount, and returns the function to end it. It exists so
+// independent front-ends that share one mount (the Alpaca Telescope wrapper and
+// the LX200 bridge) cannot interleave their set-target sequences and leave the
+// device's single target register holding one client's RA with another's Dec.
+//
+// It guards only the per-command mutex's blind spot: the gap *between* commands.
+// Individual commands stay serialized by mu as before; OpLock is a second, outer
+// lock taken for the duration of a sequence. Use it as:
+//
+//	defer m.OpLock()()
+//	m.SetTargetRA(ra); m.SetTargetDec(dec); m.SlewToTarget()
+//
+// Callers that go through the Mount interface discover it via the OpLocker
+// assertion; a mount that does not provide it simply runs without the outer lock.
+func (c *Conn) OpLock() func() {
+	c.opMu.Lock()
+	return c.opMu.Unlock
 }
 
 // ErrTimeout is returned when a reply does not arrive within the command timeout.
