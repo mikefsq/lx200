@@ -1,7 +1,5 @@
 package tenmicron
 
-import "strings"
-
 // HomeState is the homing-search result reported by :h?#.
 type HomeState int
 
@@ -36,14 +34,18 @@ func (m *Mount) SeekHomeAndStore() error {
 
 // HomeStatus returns the homing-search state (:h?#).
 func (m *Mount) HomeStatus() (HomeState, error) {
-	s, err := m.Get(":h?#")
+	// :h?# replies with a SINGLE status character and no '#' terminator (10Micron
+	// spec), so it must be read as one byte — reading until '#' waits out the whole
+	// command timeout for a delimiter that never comes (a ~3s stall on every poll,
+	// since AtHome is in the DeviceState batch).
+	b, err := m.AckByte(":h?#")
 	if err != nil {
 		return HomeFailed, err
 	}
-	switch strings.TrimSpace(s) {
-	case "1":
+	switch b {
+	case '1':
 		return HomeFound, nil
-	case "2":
+	case '2':
 		return HomeInProgress, nil
 	default:
 		return HomeFailed, nil

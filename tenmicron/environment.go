@@ -49,8 +49,9 @@ func (m *Mount) SetRefractionCorrection(on bool) (bool, error) {
 	return m.Ack(fmt.Sprintf(":SREF%d#", b2i(on)))
 }
 
-// RefractionCorrection reports whether refraction correction is active (:GREF#).
-func (m *Mount) RefractionCorrection() (bool, error) { return m.getBool(":GREF#") }
+// RefractionCorrection reports whether refraction correction is active (:GREF#) — a
+// single status byte, no '#' terminator (see getBoolByte).
+func (m *Mount) RefractionCorrection() (bool, error) { return m.getBoolByte(":GREF#") }
 
 // SetSpeedCorrection enables/disables the speed-correction flag (:SSCn#), which
 // scales RA/azimuth move speed by cos(dec)⁻¹ for constant on-sky angular speed.
@@ -58,8 +59,9 @@ func (m *Mount) SetSpeedCorrection(on bool) (bool, error) {
 	return m.Ack(fmt.Sprintf(":SSC%d#", b2i(on)))
 }
 
-// SpeedCorrection reports whether the speed-correction flag is active (:GSC#).
-func (m *Mount) SpeedCorrection() (bool, error) { return m.getBool(":GSC#") }
+// SpeedCorrection reports whether the speed-correction flag is active (:GSC#) — a
+// single status byte, no '#' terminator (see getBoolByte).
+func (m *Mount) SpeedCorrection() (bool, error) { return m.getBoolByte(":GSC#") }
 
 // ErrWeatherUnavailable is returned by the weather-station getters when no fresh
 // datum is available (missing or older than 300 s; mount replies "E#").
@@ -116,11 +118,23 @@ func (m *Mount) SetWeatherAutoUpdateMode(mode WeatherAutoUpdate) (bool, error) {
 	return m.Ack(fmt.Sprintf(":WSS%d#", int(mode)))
 }
 
-// getBool reads a '#'-terminated "0"/"1" reply as a boolean.
+// getBool reads a '#'-terminated "0"/"1" reply as a boolean (e.g. :GDH#, :GditS#).
 func (m *Mount) getBool(cmd string) (bool, error) {
 	s, err := m.Get(cmd)
 	if err != nil {
 		return false, err
 	}
 	return strings.TrimSpace(s) == "1", nil
+}
+
+// getBoolByte reads a SINGLE status character with no '#' terminator as a boolean —
+// the shape of the 10Micron "get flag" queries that reply one bare char (:GREF#,
+// :GSC#). Reading these with getBool (read until '#') stalls the whole command
+// timeout, the same bug class as :h?#/:Guaf#.
+func (m *Mount) getBoolByte(cmd string) (bool, error) {
+	b, err := m.AckByte(cmd)
+	if err != nil {
+		return false, err
+	}
+	return b == '1', nil
 }

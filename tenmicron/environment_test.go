@@ -8,8 +8,8 @@ import (
 
 func TestRefractionSpeedFlags(t *testing.T) {
 	m, f := newMount(map[string]string{
-		":SREF1#": "1", ":GREF#": "1#",
-		":SSC0#": "1", ":GSC#": "0#",
+		":SREF1#": "1", ":GREF#": "1", // :GREF# replies a bare status byte, no '#'
+		":SSC0#": "1", ":GSC#": "0", // :GSC# = bare status byte, no '#'
 	})
 	if ok, err := m.SetRefractionCorrection(true); err != nil || !ok || f.LastWrite() != ":SREF1#" {
 		t.Errorf("SetRefractionCorrection: ok=%v err=%v wrote %q", ok, err, f.LastWrite())

@@ -84,13 +84,15 @@ func (m *Mount) SetMeridianSideBehaviour(s MeridianSide) (bool, error) {
 func (m *Mount) MeridianTrackLimit() (int, error) { return m.getInt(":Glmt#") }
 func (m *Mount) MeridianSlewLimit() (int, error)  { return m.getInt(":Glms#") }
 
-// UnattendedFlip reports the unattended-flip setting (:Guaf#).
+// UnattendedFlip reports the unattended-flip setting (:Guaf#). Like :h?#, the reply
+// is a single status character with no '#' terminator, so it must be read as one
+// byte — reading until '#' stalls for the whole command timeout (see HomeStatus).
 func (m *Mount) UnattendedFlip() (bool, error) {
-	s, err := m.Get(":Guaf#")
+	b, err := m.AckByte(":Guaf#")
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(s) == "1", nil
+	return b == '1', nil
 }
 
 // SetUnattendedFlip enables/disables the unattended meridian flip (:Suaf, no reply).

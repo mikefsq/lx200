@@ -67,6 +67,13 @@ type Horizontal interface {
 	Azimuth() (float64, error)
 }
 
+// Productizer is implemented by mounts that report a product-name string (LX200
+// :GVP#). The LX200 bridge serves it on :GVP# so a connecting client sees the real
+// connected mount rather than the bridge's generic identity.
+type Productizer interface {
+	Product() (string, error)
+}
+
 // Guider is implemented by mounts supporting timed pulse guiding. (Alpaca
 // CanPulseGuide; *Conn satisfies this via PulseGuide.)
 type Guider interface {
@@ -106,9 +113,27 @@ type SiteSetter interface {
 	SetSiteElevation(meters float64) error
 }
 
+// SiteReader is implemented by mounts that report their configured observing site
+// (degrees, longitude East-positive). The LX200 bridge reads it once and re-formats
+// it into Meade :Gg#/:Gt# replies for clients that need site coordinates.
+type SiteReader interface {
+	SiteLatitude() (float64, error)
+	SiteLongitude() (float64, error)
+}
+
 // Clock is implemented by mounts that accept the UTC date/time. (Alpaca UTCDate.)
 type Clock interface {
 	SetUTC(t time.Time) error
+}
+
+// UTCOffsetReader / UTCOffsetSetter read and set the offset added to local time to
+// obtain UTC (LX200 :GG#/:SG#; positive west of Greenwich). The bridge needs the
+// offset to render Meade local date/time and to apply a client's time set.
+type UTCOffsetReader interface {
+	UTCOffset() (time.Duration, error)
+}
+type UTCOffsetSetter interface {
+	SetUTCOffset(offset time.Duration) error
 }
 
 // OpLocker is implemented by mounts that can serialize a multi-command logical

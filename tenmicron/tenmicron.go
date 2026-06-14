@@ -22,17 +22,20 @@ import (
 	"github.com/mikefsq/lx200"
 )
 
-// statusTTL coalesces the burst of getters in one Alpaca poll into a single
-// :Ginfo# round-trip: the first getter fetches, the rest read the cache.
-const statusTTL = 150 * time.Millisecond
+// defaultStatusTTL coalesces the burst of getters in one Alpaca poll into a single
+// :Ginfo# round-trip: the first getter fetches, the rest read the cache. A consumer
+// that runs its own status poller raises it past the poll interval (SetStatusTTL) so
+// other front-ends ride the poller's cache rather than each refetching.
+const defaultStatusTTL = 150 * time.Millisecond
 
 // Mount is a 10Micron mount on a golx200 LX200 connection.
 type Mount struct {
 	*lx200.Conn
 
-	mu       sync.Mutex
-	cached   Status
-	cachedAt time.Time
+	mu        sync.Mutex
+	cached    Status
+	cachedAt  time.Time
+	statusTTL time.Duration // how long a :Ginfo# read is cached (see SetStatusTTL)
 }
 
 // Connect dials the mount over TCP (e.g. "10.0.1.51:3492") and switches it into
@@ -42,12 +45,33 @@ func Connect(addr string) (*Mount, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Mount{Conn: lx200.New(tr, 3*time.Second)}
+	m := &Mount{Conn: lx200.New(tr, 3*time.Second), statusTTL: defaultStatusTTL}
 	if err := m.Blind(":U2#"); err != nil { // ultra precision (no reply)
 		m.Close()
 		return nil, fmt.Errorf("gotenmicron: set ultra-precision: %w", err)
 	}
 	return m, nil
+}
+
+// SetStatusTTL sets how long a :Ginfo# status read is cached before the next read
+// refetches. The default (150 ms) just coalesces one poll's burst of getters. A
+// consumer that runs its own status poller (the Alpaca driver) raises it PAST the
+// poll interval and drives the cache with Refresh, so concurrent front-ends — the
+// LX200 bridge, the INDI server — ride the poller's cache instead of each issuing
+// their own round-trip on the single mount link. Safe to call anytime.
+func (m *Mount) SetStatusTTL(d time.Duration) {
+	m.mu.Lock()
+	m.statusTTL = d
+	m.mu.Unlock()
+}
+
+// Refresh forces a fresh :Ginfo# read (ignoring the cache TTL) and returns the decoded
+// status. It is the seam a status poller calls each cycle: it keeps the cache hot so
+// every other reader served from status() (RA/Dec/Slewing/… across all front-ends)
+// gets the poller's value without a round-trip of its own.
+func (m *Mount) Refresh() (Status, error) {
+	m.invalidate()
+	return m.status()
 }
 
 // --- Status (:Ginfo#) -------------------------------------------------------
@@ -98,7 +122,11 @@ func (s Status) IsParked() bool { return s.Gstat == GstatParked }
 func (m *Mount) status() (Status, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.cachedAt.IsZero() && time.Since(m.cachedAt) < statusTTL {
+	ttl := m.statusTTL
+	if ttl <= 0 { // a directly-constructed Mount (tests) gets the default, not "no cache"
+		ttl = defaultStatusTTL
+	}
+	if !m.cachedAt.IsZero() && time.Since(m.cachedAt) < ttl {
 		return m.cached, nil
 	}
 	raw, err := m.Get(":Ginfo#")
