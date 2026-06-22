@@ -53,3 +53,14 @@ func TestTrackingActive(t *testing.T) {
 		t.Errorf("TrackingActive = true, want false")
 	}
 }
+
+func TestDualAxisTracking(t *testing.T) {
+	m, _ := newMount(map[string]string{":Gdat#": "1#"})
+	if on, err := m.DualAxisTracking(); err != nil || !on {
+		t.Errorf("DualAxisTracking = %v, %v; want true", on, err)
+	}
+	m2, _ := newMount(map[string]string{":Gdat#": "0#"})
+	if on, _ := m2.DualAxisTracking(); on {
+		t.Errorf("DualAxisTracking = true, want false")
+	}
+}

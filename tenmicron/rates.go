@@ -46,10 +46,28 @@ func (m *Mount) GuideRateSidereal() (float64, error) {
 	return r / siderealArcsecPerSec, nil
 }
 
-// SetGuideRate sets the guide rate in arcsec/s (:RgSS.S#); must not exceed the
-// sidereal rate (~15.041"/s). It is applied to the :Me/:Mw/:Mn/:Ms guide moves
-// once guiding rate is selected.
+// GuideRateMaxArcsec / GuideRateMinArcsec bound the guide rate (:Rg) in arcsec/s:
+// the protocol forbids exceeding sidereal (1.0×), and the GM1000HPS manual gives 0.1×
+// sidereal as the minimum adjustable guide speed. SetGuideRate clamps to this band.
+const (
+	GuideRateMaxArcsec = siderealArcsecPerSec       // 1.0× sidereal ≈ 15.041"/s
+	GuideRateMinArcsec = siderealArcsecPerSec * 0.1 // 0.1× sidereal ≈ 1.504"/s
+)
+
+// SetGuideRate sets the guide rate in arcsec/s (:RgSS.S#), CLAMPED to the mount's
+// supported band [GuideRateMinArcsec, GuideRateMaxArcsec] = [0.1×, 1.0×] sidereal. The
+// protocol forbids exceeding sidereal (it would reverse the RA axis during an East
+// correction) and :Rg is a no-reply command, so an out-of-range value gets no rejection —
+// the clamp also keeps the SS.S wire format from overflowing (>=100"/s would widen it).
+// The 0.1× floor is the manual's minimum adjustable guide speed. It applies to the
+// :Me/:Mw/:Mn/:Ms guide moves and :Mg pulses once the guiding rate is selected.
 func (m *Mount) SetGuideRate(arcsecPerSec float64) error {
+	if arcsecPerSec > GuideRateMaxArcsec {
+		arcsecPerSec = GuideRateMaxArcsec
+	}
+	if arcsecPerSec < GuideRateMinArcsec {
+		arcsecPerSec = GuideRateMinArcsec
+	}
 	return m.Blind(fmt.Sprintf(":Rg%04.1f#", arcsecPerSec))
 }
 

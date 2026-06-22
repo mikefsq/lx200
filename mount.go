@@ -104,6 +104,15 @@ type TrackRater interface {
 	TrackSolar() error
 }
 
+// DualAxisTracker is implemented by mounts that can toggle dual-axis tracking — driving
+// BOTH axes to follow a refraction/pointing model (10Micron :Sdat/:Gdat). There is no
+// standard ASCOM/Alpaca member for it, so front-ends expose it as an INDI switch or an
+// Alpaca Action. It is per-mount (only some protocols have it), not on the core *Conn.
+type DualAxisTracker interface {
+	DualAxisTracking() (bool, error)
+	SetDualAxisTracking(on bool) error
+}
+
 // SiteSetter is implemented by mounts that accept observing-site geometry.
 // (Alpaca SiteLatitude/SiteLongitude/SiteElevation — formats/signs are
 // mount-specific, hence per-mount, not in the core.)

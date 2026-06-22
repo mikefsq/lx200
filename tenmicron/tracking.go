@@ -19,9 +19,26 @@ func (m *Mount) SetTracking(on bool) error {
 	return nil
 }
 
-// SetDualAxisTracking enables/disables dual-axis tracking (:Sdat, replies 0/1).
+// SetDualAxisTracking enables/disables dual-axis tracking (:SdatN#, replies 1 valid /
+// 0 invalid): with it on the mount drives BOTH axes to follow the refraction/pointing
+// model. It does NOT start or stop tracking itself. Disabling (N=0) is only valid on an
+// equatorial mount — an AltAz must always track both axes, so the mount rejects :Sdat0#
+// there (Ack false -> error). It gates SetCustomDecRate (:RD): a declination offset only
+// moves the axis while dual-axis tracking is on. There is no standard ASCOM/Alpaca member
+// for this — a wrapper exposes it as an Alpaca Action / an INDI switch. Read back with
+// DualAxisTracking.
 func (m *Mount) SetDualAxisTracking(on bool) error {
 	return must(m.Ack(fmt.Sprintf(":Sdat%d#", b2i(on))))
+}
+
+// DualAxisTracking reports whether dual-axis tracking is enabled (:Gdat#): 1 enabled,
+// 0 disabled (equatorial only). The read-back counterpart of SetDualAxisTracking.
+func (m *Mount) DualAxisTracking() (bool, error) {
+	s, err := m.Get(":Gdat#")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(s) == "1", nil
 }
 
 // TrackRate selects a tracking rate via the 10Micron :RT family.
