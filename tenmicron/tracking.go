@@ -33,12 +33,11 @@ func (m *Mount) SetDualAxisTracking(on bool) error {
 
 // DualAxisTracking reports whether dual-axis tracking is enabled (:Gdat#): 1 enabled,
 // 0 disabled (equatorial only). The read-back counterpart of SetDualAxisTracking.
+// :Gdat# replies a SINGLE status byte with NO '#' terminator (the 10Micron get-flag
+// shape, like :GREF#/:h?#), so it is read with getBoolByte — reading it until '#' (Get)
+// waits out the whole command timeout for a delimiter that never comes.
 func (m *Mount) DualAxisTracking() (bool, error) {
-	s, err := m.Get(":Gdat#")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(s) == "1", nil
+	return m.getBoolByte(":Gdat#")
 }
 
 // TrackRate selects a tracking rate via the 10Micron :RT family.
