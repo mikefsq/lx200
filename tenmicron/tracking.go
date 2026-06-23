@@ -106,11 +106,9 @@ func (m *Mount) TrackingRateHz() (float64, error) {
 }
 
 // TrackingActive reports the mount's live tracking state (:GTRK#), queried
-// directly rather than derived from the cached :Ginfo status.
+// directly rather than derived from the cached :Ginfo status. :GTRK# replies a
+// SINGLE bare status byte with no '#' terminator (the get-flag shape), so it is
+// read with getBoolByte — reading until '#' (Get) stalls the command timeout.
 func (m *Mount) TrackingActive() (bool, error) {
-	s, err := m.Get(":GTRK#")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(s) == "1", nil
+	return m.getBoolByte(":GTRK#")
 }

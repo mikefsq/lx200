@@ -44,11 +44,11 @@ func TestTrackingRateHz(t *testing.T) {
 }
 
 func TestTrackingActive(t *testing.T) {
-	m, _ := newMount(map[string]string{":GTRK#": "1#"})
+	m, _ := newMount(map[string]string{":GTRK#": "1"}) // single bare byte, no '#'
 	if on, err := m.TrackingActive(); err != nil || !on {
 		t.Errorf("TrackingActive = %v, %v; want true", on, err)
 	}
-	m2, _ := newMount(map[string]string{":GTRK#": "0#"})
+	m2, _ := newMount(map[string]string{":GTRK#": "0"})
 	if on, _ := m2.TrackingActive(); on {
 		t.Errorf("TrackingActive = true, want false")
 	}

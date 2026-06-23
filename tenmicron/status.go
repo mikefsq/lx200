@@ -110,16 +110,18 @@ func (m *Mount) Flip() error {
 }
 
 // DestinationSideOfPier reports which side the mount would slew the selected target
-// to (:GTsid#): West, East, or Unknown (no/unreachable target).
+// to (:GTsid#): West, East, or Unknown (no/unreachable target). :GTsid# replies a
+// SINGLE bare status digit with no '#' terminator (read with AckByte — reading until
+// '#' via getInt would stall the command timeout).
 func (m *Mount) DestinationSideOfPier() (lx200.PierSide, error) {
-	n, err := m.getInt(":GTsid#")
+	b, err := m.AckByte(":GTsid#")
 	if err != nil {
 		return lx200.PierUnknown, err
 	}
-	switch n {
-	case 2:
+	switch b {
+	case '2':
 		return lx200.PierWest, nil
-	case 3:
+	case '3':
 		return lx200.PierEast, nil
 	default:
 		return lx200.PierUnknown, nil

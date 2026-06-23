@@ -62,10 +62,10 @@ func TestLimitSetters(t *testing.T) {
 }
 
 func TestDestinationSideOfPier(t *testing.T) {
-	for reply, want := range map[string]lx200.PierSide{
-		"2#": lx200.PierWest,
-		"3#": lx200.PierEast,
-		"0#": lx200.PierUnknown,
+	for reply, want := range map[string]lx200.PierSide{ // single bare digit, no '#'
+		"2": lx200.PierWest,
+		"3": lx200.PierEast,
+		"0": lx200.PierUnknown,
 	} {
 		m, _ := newMount(map[string]string{":GTsid#": reply})
 		if ps, err := m.DestinationSideOfPier(); err != nil || ps != want {

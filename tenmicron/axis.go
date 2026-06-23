@@ -70,10 +70,12 @@ func (m *Mount) ParkInPlace() error {
 func (m *Mount) ParkToSaved() error { return m.parkCode(":PsX#") }
 
 // SaveParkPosition stores the current angular position as the park position used
-// by ParkToSaved (:PyX#). The spec's reply codes are ambiguous (both documented as
-// "0"), so only a transport error is reported.
+// by ParkToSaved (:PyX#). The reply is a SINGLE bare status byte with no '#'
+// terminator (read with AckByte, not Get, which would stall the command timeout);
+// the spec's reply codes are ambiguous (both documented "0"), so only a transport
+// error is reported.
 func (m *Mount) SaveParkPosition() error {
-	_, err := m.Get(":PyX#")
+	_, err := m.AckByte(":PyX#")
 	if err == nil {
 		m.invalidate()
 	}

@@ -52,7 +52,7 @@ func TestParkPositions(t *testing.T) {
 	if err := m4.SlewToAxisTargetAndPark(); err == nil {
 		t.Errorf("SlewToAxisTargetAndPark(1#): want below-limit error")
 	}
-	m5, f5 := newMount(map[string]string{":PyX#": "0#"})
+	m5, f5 := newMount(map[string]string{":PyX#": "0"}) // single bare byte, no '#'
 	if err := m5.SaveParkPosition(); err != nil || f5.LastWrite() != ":PyX#" {
 		t.Errorf("SaveParkPosition: %v wrote %q", err, f5.LastWrite())
 	}

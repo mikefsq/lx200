@@ -71,13 +71,10 @@ func (m *Mount) SetGuideRate(arcsecPerSec float64) error {
 	return m.Blind(fmt.Sprintf(":Rg%04.1f#", arcsecPerSec))
 }
 
-// GuiderPortEnabled reports the autoguide-port status (:Gge#).
+// GuiderPortEnabled reports the autoguide-port status (:Gge#) — a single bare
+// status byte with no '#' terminator (read with getBoolByte, not Get).
 func (m *Mount) GuiderPortEnabled() (bool, error) {
-	s, err := m.Get(":Gge#")
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(s) == "1", nil
+	return m.getBoolByte(":Gge#")
 }
 
 // SetGuiderPortEnabled enables/disables the autoguide port (:SgeN#).
