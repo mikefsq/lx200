@@ -12,7 +12,28 @@ import (
 
 func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
 	f := lx200test.New(replies)
-	return &Mount{Conn: lx200.New(f, 200*time.Millisecond)}, f
+	// Default to homed: most tests exercise slews, which are gated on HomeFound.
+	// TestRequireHomeGate covers the un-homed path explicitly.
+	return &Mount{Conn: lx200.New(f, 200*time.Millisecond), homeFound: true}, f
+}
+
+// TestRequireHomeGate: slews are refused until the mount has been homed.
+func TestRequireHomeGate(t *testing.T) {
+	m, _ := newMount(nil)
+	m.homeFound = false
+	if err := m.SlewToTarget(); err == nil {
+		t.Error("SlewToTarget should be refused before homing")
+	}
+	if err := m.SlewToAltAz(180, 0); err == nil {
+		t.Error("SlewToAltAz should be refused before homing")
+	}
+	if _, err := m.SyncToTarget(); err == nil {
+		t.Error("SyncToTarget should be refused before homing")
+	}
+	m.homeFound = true
+	if err := m.SlewToTarget(); err != nil {
+		t.Errorf("SlewToTarget after home: %v", err)
+	}
 }
 
 // TestCoordPrefixAndSign is the key regression: RST replies echo the command
@@ -64,7 +85,7 @@ func TestSlewingViaToken(t *testing.T) {
 func TestSyncBuildsCk(t *testing.T) {
 	m, f := newMount(map[string]string{
 		":Sr20:30:00.0#":  "1",
-		":Sd-52*00:00.0#": "1",
+		":Sd-52*00'00.0#": "1",
 	})
 	m.SetTargetRA(20.5)
 	m.SetTargetDec(-52.0)
@@ -77,15 +98,12 @@ func TestSyncBuildsCk(t *testing.T) {
 }
 
 func TestSiteFormat(t *testing.T) {
-	m, f := newMount(map[string]string{
-		":St+37*30*00#":  "1",
-		":Sg+122*30*00#": "1",
-	})
-	if err := m.SetSiteLatitude(37.5); err != nil || f.LastWrite() != ":St+37*30*00#" {
+	m, f := newMount(nil) // :St/:Sg are blind on the RST — no reply to mock
+	if err := m.SetSiteLatitude(37.5); err != nil || f.LastWrite() != ":St+37*30'00#" {
 		t.Errorf("SetSiteLatitude: %v wrote %q", err, f.LastWrite())
 	}
-	if err := m.SetSiteLongitude(-122.5); err != nil || f.LastWrite() != ":Sg+122*30*00#" {
-		t.Errorf("SetSiteLongitude(-122.5) wrote %q, want :Sg+122*30*00# (East-negative)", f.LastWrite())
+	if err := m.SetSiteLongitude(-122.5); err != nil || f.LastWrite() != ":Sg+122*30'00#" {
+		t.Errorf("SetSiteLongitude(-122.5) wrote %q, want :Sg+122*30'00# (East-negative)", f.LastWrite())
 	}
 }
 
@@ -93,7 +111,7 @@ func TestSiteFormat(t *testing.T) {
 func TestAddAlignmentPoint(t *testing.T) {
 	m, f := newMount(map[string]string{
 		":Sr20:30:00.0#":  "1",
-		":Sd-52*00:00.0#": "1",
+		":Sd-52*00'00.0#": "1",
 	})
 	m.SetTargetRA(20.5)
 	m.SetTargetDec(-52.0)
@@ -105,6 +123,39 @@ func TestAddAlignmentPoint(t *testing.T) {
 	}
 }
 
+// TestGetResyncPastStrayToken: a pushed completion token sitting in the buffer
+// ahead of a coordinate reply must be consumed (not parsed as coordinates). This is
+// the "no numeric fields in CHO" crash the manage loop hit.
+func TestGetResyncPastStrayToken(t *testing.T) {
+	m, f := newMount(map[string]string{
+		":GR#": ":GR20:28:56.9#",
+		":GD#": ":GD+00*00'00.0#",
+		":GZ#": ":GZ270*00'00.0#",
+		":GA#": ":GA+00*00'00.0#",
+	})
+	m.homeFound = false
+	f.Push(":CHO#") // a home-completion token lands before our :GR reply
+	ra, err := m.RA()
+	if err != nil {
+		t.Fatalf("RA past stray :CHO#: %v", err)
+	}
+	if want := 20 + 28.0/60 + 56.9/3600; math.Abs(ra-want) > 1e-6 {
+		t.Errorf("RA = %v, want %v (the :CHO token should be skipped)", ra, want)
+	}
+	if !m.HomeFound() {
+		t.Error("HomeFound = false; the consumed :CHO token should have latched it")
+	}
+	// The :CHO armed a deferred home capture; a follow-up read performs it, so the
+	// home position becomes available (and AtHome can go true) even though the token
+	// was caught by the resync path rather than drainToken.
+	if _, err := m.Dec(); err != nil {
+		t.Fatalf("follow-up Dec: %v", err)
+	}
+	if _, _, _, _, ok := m.HomePosition(); !ok {
+		t.Error("home position not captured after a follow-up read (deferred capture)")
+	}
+}
+
 // TestTrackMode: :Ct?# readback mapping (capture-confirmed 0/1/2).
 func TestTrackMode(t *testing.T) {
 	for _, c := range []struct {
@@ -113,7 +164,8 @@ func TestTrackMode(t *testing.T) {
 	}{
 		{":CT0#", TrackModeSidereal},
 		{":CT1#", TrackModeSolar},
-		{":CT2#", TrackModeCustom},
+		{":CT2#", TrackModeLunar},
+		{":CT3#", TrackModeCustom},
 	} {
 		m, _ := newMount(map[string]string{":Ct?#": c.reply})
 		if got, err := m.TrackMode(); err != nil || got != c.want {
@@ -143,7 +195,7 @@ func TestPierSide(t *testing.T) {
 
 // TestPulseGuideStop: the async stop must be the bare :Q# (RST has no :Q{dir}#).
 func TestPulseGuideStop(t *testing.T) {
-	m, f := newMount(nil)
+	m, f := newMount(map[string]string{":CtU#": ":CTU#"}) // custom-track echo-ack
 	if err := m.PulseGuide(lx200.North, 20); err != nil {
 		t.Fatalf("PulseGuide: %v", err)
 	}
@@ -226,9 +278,12 @@ func TestFindPort(t *testing.T) {
 }
 
 func TestTrackRatesAndPark(t *testing.T) {
+	// Park = polar-axis slew: reads latitude (:Gt#), gotos the pole via :Sz/:Sa
+	// (blind) + :MA#. AtPark latches on the :MM0# completion and clears on Unpark.
 	m, f := newMount(map[string]string{
-		":Sz180*00'00.0\"#": "1",
-		":Sa+00*00'00.0\"#": "1",
+		":CtR#": ":CTR#",           // echoed track command
+		":CtA#": ":CTA#",           // Unpark -> SetTracking(true)
+		":Gt#":  ":Gt+37*30'00.0#", // latitude -> pole target
 	})
 	if err := m.TrackSidereal(); err != nil || f.LastWrite() != ":CtR#" {
 		t.Errorf("TrackSidereal wrote %q, want :CtR#", f.LastWrite())
@@ -236,7 +291,39 @@ func TestTrackRatesAndPark(t *testing.T) {
 	if err := m.Park(); err != nil || f.LastWrite() != ":MA#" {
 		t.Errorf("Park: %v final write %q, want :MA#", err, f.LastWrite())
 	}
-	if p, _ := m.AtPark(); !p {
-		t.Errorf("AtPark = false after Park")
+	if p, _ := m.AtPark(); p {
+		t.Error("AtPark = true before the completion token")
+	}
+	f.Push(":MM0#")
+	time.Sleep(peekTTL)
+	if sl, _ := m.Slewing(); sl { // drains the token, latching parked
+		t.Error("still slewing after :MM0#")
+	}
+	if p, err := m.AtPark(); err != nil || !p {
+		t.Errorf("AtPark = %v, %v; want true after park completion", p, err)
+	}
+	if err := m.Unpark(); err != nil {
+		t.Fatalf("Unpark: %v", err)
+	}
+	if p, _ := m.AtPark(); p {
+		t.Error("AtPark = true after Unpark; want false")
+	}
+}
+
+// TestAtHomePosition: AtHome is true only when current Az/Alt matches the captured
+// home, and false once the mount has slewed away.
+func TestAtHomePosition(t *testing.T) {
+	m, _ := newMount(map[string]string{
+		":GZ#": ":GZ270*00'00.0#", // current Az 270 (West horizon)
+		":GA#": ":GA+00*00'00.0#", // current Alt 0
+	})
+	// No home captured yet -> not at home.
+	if at, _ := m.AtHome(); at {
+		t.Error("AtHome = true with no captured home")
+	}
+	// Capture home at the West horizon (Az 270 / Alt 0).
+	m.home = homePosition{valid: true, az: 270, alt: 0}
+	if at, err := m.AtHome(); err != nil || !at {
+		t.Errorf("AtHome = %v, %v; want true (at captured home)", at, err)
 	}
 }
