@@ -85,10 +85,15 @@ func (m *Mount) GuideRateSidereal() (float64, error) {
 	return r / siderealArcsecPerSec, nil
 }
 
-// GuideRateMaxArcsec is the sidereal rate (≈15.041"/s), the spec's stated ceiling for
-// the guide rate ("shall not exceed sidereal speed"). The mount enforces it;
-// SetGuideRate does not clamp.
-const GuideRateMaxArcsec = siderealArcsecPerSec // 1.0× sidereal ≈ 15.041"/s
+// GuideRateMinArcsec and GuideRateMaxArcsec are the guide-rate band the GM1000HPS
+// manual recommends, in arcsec/s: from 0.1× sidereal (the keypad's minimum adjustable
+// guide speed) up to 1.0× sidereal (the spec's ceiling — the rate "shall not exceed
+// sidereal speed"). They are advisory bounds for callers and UIs; SetGuideRate does NOT
+// clamp to them — it sends the value verbatim and lets the mount apply its own limit.
+const (
+	GuideRateMinArcsec = siderealArcsecPerSec * 0.1 // 0.1× sidereal ≈ 1.504"/s
+	GuideRateMaxArcsec = siderealArcsecPerSec       // 1.0× sidereal ≈ 15.041"/s
+)
 
 // SetGuideRate sets the guide rate in arcsec/s (:Rg00.000#, three decimals to match
 // the vendor driver's precision — the spec's SS.S is only its documented minimum). The
