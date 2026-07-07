@@ -44,9 +44,11 @@ func TestGstatMapping(t *testing.T) {
 	}{
 		{GstatTracking, true, false, false},
 		{GstatParking, false, true, false},
+		{GstatUnparking, false, true, false}, // 3: transitional motion -> slewing, not tracking
 		{GstatParked, false, false, true},
 		{GstatSlewing, false, true, false},
 		{GstatStopped, false, false, false},
+		{GstatOutOfLimits, true, false, false}, // 9: spec "tracking is on but outside limits"
 		{GstatFollowingSat, true, false, false},
 		{GstatUnknown, false, false, false}, // 98 -> idle (matches INDI)
 		{GstatError, false, false, false},   // 99 -> idle
@@ -82,6 +84,39 @@ func TestStatusServedFromGinfo(t *testing.T) {
 	// The burst above must have hit :Ginfo# only once (cache TTL).
 	if n := f.Count(":Ginfo#"); n != 1 {
 		t.Errorf(":Ginfo# sent %d times, want 1 (cache coalescing)", n)
+	}
+}
+
+func TestPierInversionSouthernOldFirmware(t *testing.T) {
+	// Old firmware (< 2.15.32) + southern hemisphere → the reported side is flipped.
+	m, _ := newMount(map[string]string{
+		":Ginfo#": "6.0,-30.0,E,90.0,45.0,2459580.5,0,0#", // pier East
+		":pS#":    "East#",
+		":GTsid#": "3", // '3' = East (single byte)
+	})
+	m.firmware, m.southern = Version{2, 15, 0}, true
+	if ps, _ := m.PierSide(); ps != lx200.PierWest {
+		t.Errorf("PierSide (old fw, south) = %v; want inverted West", ps)
+	}
+	if ps, _ := m.PointingState(); ps != lx200.PierWest {
+		t.Errorf("PointingState (old fw, south) = %v; want inverted West", ps)
+	}
+	if ps, _ := m.DestinationSideOfPier(); ps != lx200.PierWest {
+		t.Errorf("DestinationSideOfPier (old fw, south) = %v; want inverted West", ps)
+	}
+
+	// Modern firmware → no inversion even in the south.
+	m2, _ := newMount(map[string]string{":pS#": "East#"})
+	m2.firmware, m2.southern = Version{3, 3, 4}, true
+	if ps, _ := m2.PointingState(); ps != lx200.PierEast {
+		t.Errorf("PointingState (modern fw) = %v; want East (no inversion)", ps)
+	}
+
+	// Old firmware but northern hemisphere → no inversion.
+	m3, _ := newMount(map[string]string{":pS#": "East#"})
+	m3.firmware, m3.southern = Version{2, 15, 0}, false
+	if ps, _ := m3.PointingState(); ps != lx200.PierEast {
+		t.Errorf("PointingState (north, old fw) = %v; want East (no inversion)", ps)
 	}
 }
 

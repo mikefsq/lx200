@@ -28,15 +28,15 @@ func (f *Focuser) cmdp(verb, params string) string {
 type FocuserStatus int
 
 const (
-	FocuserStopped     FocuserStatus = 0
-	FocuserTracking    FocuserStatus = 1
-	FocuserManual      FocuserStatus = 2
-	FocuserSlewing     FocuserStatus = 3
-	FocuserSlewingHome FocuserStatus = 4
-	FocuserStopping    FocuserStatus = 5
+	FocuserStopped     FocuserStatus = 0  // stopped
+	FocuserTracking    FocuserStatus = 1  // tracking temperature/position
+	FocuserManual      FocuserStatus = 2  // manual motion
+	FocuserSlewing     FocuserStatus = 3  // slewing to target
+	FocuserSlewingHome FocuserStatus = 4  // slewing to home
+	FocuserStopping    FocuserStatus = 5  // stopping
 	FocuserLost        FocuserStatus = 6  // lost position, needs homing
 	FocuserOverload    FocuserStatus = 97 // stopped due to overload
-	FocuserUnknown     FocuserStatus = 98
+	FocuserUnknown     FocuserStatus = 98 // status not known
 	FocuserError       FocuserStatus = 99 // error or invalid index
 )
 
@@ -131,9 +131,9 @@ func (f *Focuser) StartHoming() (bool, error) { return f.m.Ack(f.cmd("HS")) }
 type FocuserHoming int
 
 const (
-	FocuserHomingIdleOrFailed FocuserHoming = 0
-	FocuserHomingInProgress   FocuserHoming = 1
-	FocuserHomingCompleted    FocuserHoming = 2
+	FocuserHomingIdleOrFailed FocuserHoming = 0 // no homing operation, or it failed
+	FocuserHomingInProgress   FocuserHoming = 1 // homing in progress
+	FocuserHomingCompleted    FocuserHoming = 2 // homing completed
 )
 
 // HomingStatus returns the focuser homing status (:FocHGN#).
@@ -153,12 +153,16 @@ func (f *Focuser) Stop() error { return f.m.Blind(f.cmd("Sq")) }
 
 // --- Legacy focuser-1 motion commands (:F…#) --------------------------------
 
-// Focuser1In / Focuser1Out start motion of focuser 1 inward/outward (:F+#/:F-#).
-func (m *Mount) Focuser1In() error  { return m.Blind(":F+#") }
+// Focuser1In starts inward motion of focuser 1 (:F+#).
+func (m *Mount) Focuser1In() error { return m.Blind(":F+#") }
+
+// Focuser1Out starts outward motion of focuser 1 (:F-#).
 func (m *Mount) Focuser1Out() error { return m.Blind(":F-#") }
 
-// Focuser1SpeedFast / Focuser1SpeedSlow set focuser-1 speed (:FF#/:FS#).
+// Focuser1SpeedFast sets focuser 1 to fast speed (:FF#).
 func (m *Mount) Focuser1SpeedFast() error { return m.Blind(":FF#") }
+
+// Focuser1SpeedSlow sets focuser 1 to slow speed (:FS#).
 func (m *Mount) Focuser1SpeedSlow() error { return m.Blind(":FS#") }
 
 // Focuser1Halt halts focuser-1 motion (:FQ#).

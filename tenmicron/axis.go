@@ -5,17 +5,39 @@ import (
 	"strings"
 )
 
-// Park / Unpark / AtPark are the lx200.Parker capability (:KA# / :PO#, no reply;
-// AtPark from the :Ginfo# Gstat). Park sends :KA#; the spec's :hP# is a byte-for-
-// byte alias ("slew to park position"), so it needs no separate method.
+// Park is the lx200.Parker capability. It matches the vendor ASCOM driver: on
+// firmware ≥ 2.9.9 it parks to the ASCOM-defined position saved via SaveParkPosition
+// (:PsX#), falling back to the keypad-defined park (:hP#) when none is saved (reply
+// "3") — so a client that never called SaveParkPosition still parks sensibly. Older
+// firmware (or unknown firmware, e.g. a directly-constructed Mount) parks straight to
+// the keypad position. (AtPark comes from the :Ginfo# Gstat.)
 func (m *Mount) Park() error {
-	if err := m.Blind(":KA#"); err != nil {
+	if m.FirmwareAtLeast(2, 9, 9) {
+		s, err := m.Get(":PsX#")
+		if err != nil {
+			return err
+		}
+		switch strings.TrimSpace(s) {
+		case "0", "4": // "4" = the mount was already parked
+			m.invalidate()
+			return nil
+		case "1":
+			return fmt.Errorf("gotenmicron: park target below lower limit")
+		case "2":
+			return fmt.Errorf("gotenmicron: park target above high limit")
+		case "3": // no saved park position / cannot: fall back to the keypad park
+		default:
+			return fmt.Errorf("gotenmicron: :PsX# unexpected reply %q", s)
+		}
+	}
+	if err := m.Blind(":hP#"); err != nil { // keypad-defined park position
 		return err
 	}
 	m.invalidate()
 	return nil
 }
 
+// Unpark unparks the mount (:PO#), which resumes tracking (lx200.Parker).
 func (m *Mount) Unpark() error {
 	if err := m.Blind(":PO#"); err != nil {
 		return err
@@ -24,24 +46,33 @@ func (m *Mount) Unpark() error {
 	return nil
 }
 
+// AtPark reports whether the mount is parked (from the :Ginfo# Gstat).
 func (m *Mount) AtPark() (bool, error) { s, err := m.status(); return s.IsParked(), err }
 
-// AxisAnglePrimary / AxisAngleSecondary read the current angular position of the
-// RA/azimuth (a) and Dec/altitude (b) axes in degrees (:GaXa#/:GaXb#).
-func (m *Mount) AxisAnglePrimary() (float64, error)   { return m.getFloat(":GaXa#") }
+// AxisAnglePrimary reads the current angular position of the RA/azimuth axis in
+// degrees (:GaXa#).
+func (m *Mount) AxisAnglePrimary() (float64, error) { return m.getFloat(":GaXa#") }
+
+// AxisAngleSecondary reads the current angular position of the Dec/altitude axis in
+// degrees (:GaXb#).
 func (m *Mount) AxisAngleSecondary() (float64, error) { return m.getFloat(":GaXb#") }
 
-// TargetAxisAnglePrimary / TargetAxisAngleSecondary read the target angular
-// positions (:QaXa#/:QaXb#).
-func (m *Mount) TargetAxisAnglePrimary() (float64, error)   { return m.getFloat(":QaXa#") }
+// TargetAxisAnglePrimary reads the target angular position of the RA/azimuth axis
+// (:QaXa#).
+func (m *Mount) TargetAxisAnglePrimary() (float64, error) { return m.getFloat(":QaXa#") }
+
+// TargetAxisAngleSecondary reads the target angular position of the Dec/altitude axis
+// (:QaXb#).
 func (m *Mount) TargetAxisAngleSecondary() (float64, error) { return m.getFloat(":QaXb#") }
 
-// SetTargetAxisAnglePrimary / SetTargetAxisAngleSecondary set the target angular
-// positions in degrees (:SaXa…#/:SaXb…#); report whether the angle is in range.
+// SetTargetAxisAnglePrimary sets the target angular position of the RA/azimuth axis in
+// degrees (:SaXa…#); reports whether the angle is in range.
 func (m *Mount) SetTargetAxisAnglePrimary(deg float64) (bool, error) {
 	return m.Ack(fmt.Sprintf(":SaXa%+09.4f#", deg))
 }
 
+// SetTargetAxisAngleSecondary sets the target angular position of the Dec/altitude axis
+// in degrees (:SaXb…#); reports whether the angle is in range.
 func (m *Mount) SetTargetAxisAngleSecondary(deg float64) (bool, error) {
 	return m.Ack(fmt.Sprintf(":SaXb%+09.4f#", deg))
 }
@@ -69,34 +100,42 @@ func (m *Mount) ParkInPlace() error {
 // ParkToSaved slews to the saved park angular position and parks (:PsX#).
 func (m *Mount) ParkToSaved() error { return m.parkCode(":PsX#") }
 
-// SaveParkPosition stores the current angular position as the park position used
-// by ParkToSaved (:PyX#). The reply is a SINGLE bare status byte with no '#'
-// terminator (read with AckByte, not Get, which would stall the command timeout);
-// the spec's reply codes are ambiguous (both documented "0"), so only a transport
-// error is reported.
+// SaveParkPosition stores the current angular position as the park position used by
+// Park / ParkToSaved (:PyX#). The reply is a SINGLE bare status byte with no '#'
+// terminator (read with AckByte, not Get, which would stall the command timeout). The
+// spec documents both success and failure as "0", but the vendor ASCOM driver treats
+// reply '1' as success and anything else as failure — the mount's actual behaviour —
+// so this does the same rather than swallowing a failed save.
 func (m *Mount) SaveParkPosition() error {
-	_, err := m.AckByte(":PyX#")
-	if err == nil {
-		m.invalidate()
+	b, err := m.AckByte(":PyX#")
+	if err != nil {
+		return err
 	}
-	return err
+	if b != '1' {
+		return fmt.Errorf("gotenmicron: :PyX# save-park rejected (reply %q)", string(b))
+	}
+	m.invalidate()
+	return nil
 }
 
-// parkCode runs a park/slew command whose reply is "0#" (ok) / "1#" (below low
-// limit) / "2#" (above high limit) and invalidates the cache on success.
+// parkCode runs a park/slew command whose reply is a single status digit: "0#" ok /
+// "1#" below the lower limit / "2#" above the high limit / "3#" cannot park (mount
+// state) / "4#" already parked. It invalidates the cache and returns nil on 0 or 4.
 func (m *Mount) parkCode(cmd string) error {
 	s, err := m.Get(cmd)
 	if err != nil {
 		return err
 	}
 	switch strings.TrimSpace(s) {
-	case "0":
+	case "0", "4": // "4" = already parked
 		m.invalidate()
 		return nil
 	case "1":
 		return fmt.Errorf("gotenmicron: %s target below lower limit", cmd)
 	case "2":
 		return fmt.Errorf("gotenmicron: %s target above high limit", cmd)
+	case "3":
+		return fmt.Errorf("gotenmicron: %s cannot park in the current mount state", cmd)
 	default:
 		return fmt.Errorf("gotenmicron: %s unexpected reply %q", cmd, s)
 	}

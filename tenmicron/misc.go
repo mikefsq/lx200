@@ -1,11 +1,5 @@
 package tenmicron
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
-
 // ParallacticAngle returns the parallactic angle in degrees, accounting for the
 // mount's actual pole alignment — for driving a field derotator (:GPA#).
 func (m *Mount) ParallacticAngle() (float64, error) { return m.getFloat(":GPA#") }
@@ -13,23 +7,18 @@ func (m *Mount) ParallacticAngle() (float64, error) { return m.getFloat(":GPA#")
 // ParallacticSpeed returns the parallactic speed wrt the mount orientation (:GPAS#).
 func (m *Mount) ParallacticSpeed() (float64, error) { return m.getFloat(":GPAS#") }
 
-// ParallacticAngleZenith returns the parallactic angle with respect to zenith
+// ParallacticAngleZenith returns the parallactic angle with respect to zenith, degrees
 // (:GPAZ#).
 func (m *Mount) ParallacticAngleZenith() (float64, error) { return m.getFloat(":GPAZ#") }
 
-// FinalApproachTimeConstant returns the final-approach time constant in seconds
-// (:GFAtc#), or an error if the function is unsupported (reply "E#").
-func (m *Mount) FinalApproachTimeConstant() (float64, error) {
-	s, err := m.Get(":GFAtc#")
-	if err != nil {
-		return 0, err
-	}
-	s = strings.TrimSpace(s)
-	if s == "E" {
-		return 0, fmt.Errorf("gotenmicron: final-approach mode not supported")
-	}
-	return strconv.ParseFloat(s, 64)
-}
+// ParallacticSpeedZenith returns the parallactic speed with respect to zenith — the
+// rate of change of the zenith parallactic angle — in arcseconds per second (:GPASZ#).
+// (Firmware ≥ 2.15.19.)
+func (m *Mount) ParallacticSpeedZenith() (float64, error) { return m.getFloat(":GPASZ#") }
+
+// StartCommLog starts logging the commands the mount receives (:startlog#); read it
+// with CommLog, end it with StopCommLog.
+func (m *Mount) StartCommLog() error { return m.Blind(":startlog#") }
 
 // StopCommLog ends the communication log (:stoplog#).
 func (m *Mount) StopCommLog() error { return m.Blind(":stoplog#") }

@@ -2,21 +2,22 @@ package tenmicron
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/mikefsq/lx200"
 )
 
-// SetTargetAltitude sets the target object altitude in degrees (:Sa…#). Reports
-// whether the target is within the slew range (mount reply 1 = in range).
+// SetTargetAltitude sets the target object altitude in degrees (:Sa sDD*MM:SS.s#, the
+// ultra-precision form — see coords.go). Reports whether the target is within the slew
+// range (mount reply 1 = in range).
 func (m *Mount) SetTargetAltitude(deg float64) (bool, error) {
-	return m.Ack(":Sa" + dms(deg, 2) + "#")
+	return m.Ack(":Sa" + dmsPrec(deg, 2, 1, true) + "#")
 }
 
-// SetTargetAzimuth sets the target object azimuth in degrees, 0..360 (:Sz…#).
-// Reports whether the mount accepted it (reply 1 = valid).
+// SetTargetAzimuth sets the target object azimuth in degrees, 0..360
+// (:Sz DDD*MM:SS.s#, unsigned ultra-precision form). Reports whether the mount
+// accepted it (reply 1 = valid).
 func (m *Mount) SetTargetAzimuth(deg float64) (bool, error) {
-	return m.Ack(":Sz" + dmsUnsigned(deg, 3) + "#")
+	return m.Ack(":Sz" + dmsPrec(deg, 3, 1, false) + "#")
 }
 
 // SlewToAltAz sets the alt/az target and slews to it (:Sa, :Sz, :MA#). :MA# uses
@@ -55,12 +56,17 @@ func (m *Mount) setAltAzTarget(altDeg, azDeg float64) error {
 	return nil
 }
 
-// TargetRA / TargetDec / TargetAltitude / TargetAzimuth read the currently set
-// target coordinates (:Gr#/:Gd#/:Ga#/:Gz#). RA in hours; the rest in degrees.
-func (m *Mount) TargetRA() (float64, error)       { return m.getAngle(":Gr#") }
-func (m *Mount) TargetDec() (float64, error)      { return m.getAngle(":Gd#") }
+// TargetRA reads the currently set target right ascension in hours (:Gr#).
+func (m *Mount) TargetRA() (float64, error) { return m.getAngle(":Gr#") }
+
+// TargetDec reads the currently set target declination in degrees (:Gd#).
+func (m *Mount) TargetDec() (float64, error) { return m.getAngle(":Gd#") }
+
+// TargetAltitude reads the currently set target altitude in degrees (:Ga#).
 func (m *Mount) TargetAltitude() (float64, error) { return m.getAngle(":Ga#") }
-func (m *Mount) TargetAzimuth() (float64, error)  { return m.getAngle(":Gz#") }
+
+// TargetAzimuth reads the currently set target azimuth in degrees (:Gz#).
+func (m *Mount) TargetAzimuth() (float64, error) { return m.getAngle(":Gz#") }
 
 func (m *Mount) getAngle(cmd string) (float64, error) {
 	s, err := m.Get(cmd)
@@ -68,11 +74,4 @@ func (m *Mount) getAngle(cmd string) (float64, error) {
 		return 0, err
 	}
 	return lx200.ParseSexagesimal(s)
-}
-
-// dmsUnsigned formats unsigned degrees as "DDD*MM:SS" with a fixed degree-field
-// width, rounded to the nearest arcsecond (for azimuth, which has no sign).
-func dmsUnsigned(deg float64, degWidth int) string {
-	t := int(math.Round(deg * 3600))
-	return fmt.Sprintf("%0*d*%02d:%02d", degWidth, t/3600, (t/60)%60, t%60)
 }

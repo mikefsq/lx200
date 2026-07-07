@@ -112,13 +112,14 @@ func (r *Rotator) SetOffset(deg float64) (bool, error) {
 	return r.m.Ack(fmt.Sprintf(":RotSof%d,%+09.4f#", r.n, deg))
 }
 
-// ZeroMechanical / ZeroEquatorial set the keypad offset so the mechanical /
-// equatorial position angle reads zero, and set the destination to the current
-// angle (:RotSmZN#/:RotSeZN#).
+// ZeroMechanical sets the keypad offset so the mechanical position angle reads zero and
+// sets the destination to the current angle (:RotSmZN#).
 func (r *Rotator) ZeroMechanical() (bool, error) {
 	return r.m.getVOK(fmt.Sprintf(":RotSmZ%d#", r.n))
 }
 
+// ZeroEquatorial sets the keypad offset so the equatorial position angle reads zero and
+// sets the destination to the current angle (:RotSeZN#).
 func (r *Rotator) ZeroEquatorial() (bool, error) {
 	return r.m.getVOK(fmt.Sprintf(":RotSeZ%d#", r.n))
 }

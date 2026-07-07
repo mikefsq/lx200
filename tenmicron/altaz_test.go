@@ -6,26 +6,26 @@ import (
 )
 
 func TestSetAltAzTarget(t *testing.T) {
-	m, f := newMount(map[string]string{":Sa+45*30:00#": "1", ":Sz123*30:00#": "1"})
+	m, f := newMount(map[string]string{":Sa+45*30:00.0#": "1", ":Sz123*30:00.0#": "1"})
 	if ok, err := m.SetTargetAltitude(45.5); err != nil || !ok {
 		t.Errorf("SetTargetAltitude: ok=%v err=%v wrote %q", ok, err, f.LastWrite())
 	}
-	if f.LastWrite() != ":Sa+45*30:00#" {
+	if f.LastWrite() != ":Sa+45*30:00.0#" {
 		t.Errorf("SetTargetAltitude wrote %q", f.LastWrite())
 	}
 	if ok, err := m.SetTargetAzimuth(123.5); err != nil || !ok {
 		t.Errorf("SetTargetAzimuth: ok=%v err=%v", ok, err)
 	}
-	if f.LastWrite() != ":Sz123*30:00#" {
+	if f.LastWrite() != ":Sz123*30:00.0#" {
 		t.Errorf("SetTargetAzimuth wrote %q", f.LastWrite())
 	}
 }
 
 func TestSlewToAltAz(t *testing.T) {
 	m, f := newMount(map[string]string{
-		":Sa+45*30:00#": "1",
-		":Sz123*30:00#": "1",
-		":MA#":          "0", // slew started
+		":Sa+45*30:00.0#": "1",
+		":Sz123*30:00.0#": "1",
+		":MA#":            "0", // slew started
 	})
 	if err := m.SlewToAltAz(45.5, 123.5); err != nil {
 		t.Fatalf("SlewToAltAz: %v", err)
@@ -36,7 +36,7 @@ func TestSlewToAltAz(t *testing.T) {
 }
 
 func TestSlewToAltAzRejected(t *testing.T) {
-	m, _ := newMount(map[string]string{":Sa-10*00:00#": "0"}) // out of range
+	m, _ := newMount(map[string]string{":Sa-10*00:00.0#": "0"}) // out of range
 	if err := m.SlewToAltAz(-10, 0); err == nil {
 		t.Errorf("SlewToAltAz below range: want error")
 	}

@@ -14,6 +14,7 @@ func TestSlewVariants(t *testing.T) {
 		{func(m *Mount) error { return m.SlewToTargetOnSide(lx200.PierWest) }, ":MSfs2#"},
 		{func(m *Mount) error { return m.SlewToTargetOnSide(lx200.PierEast) }, ":MSfs3#"},
 		{(*Mount).SlewToTargetNoFineLimit, ":MSnf#"},
+		{func(m *Mount) error { return m.Nudge(100, -50) }, ":NUDGE+0100,-0050#"},
 		{(*Mount).SlewPolarAlign, ":MSap#"},
 		{(*Mount).SlewOrthoAlign, ":MSao#"},
 	}

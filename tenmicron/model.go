@@ -87,6 +87,10 @@ func (m *Mount) DeleteAlignment() error {
 // (:getalst#).
 func (m *Mount) AlignmentStarCount() (int, error) { return m.getInt(":getalst#") }
 
+// MaxAlignmentStars returns the maximum number of alignment stars the model can hold
+// (:getalstm#, firmware ≥ 3.3.1).
+func (m *Mount) MaxAlignmentStars() (int, error) { return m.getInt(":getalstm#") }
+
 // ErrModelTooFewStars is returned by AlignmentInfo when the model has fewer than
 // two stars (mount replies "E#").
 var ErrModelTooFewStars = errors.New("gotenmicron: alignment model has fewer than two stars")
@@ -139,6 +143,101 @@ func (m *Mount) AlignmentInfo() (AlignmentInfo, error) {
 // returned unparsed for callers that need it. Errors ("E#") surface as the string.
 func (m *Mount) AlignmentStar(n int) (string, error) {
 	return m.Get(fmt.Sprintf(":getali%d#", n))
+}
+
+// AlignmentPointInfo is the decoded :getalpN# per-star residual.
+type AlignmentPointInfo struct {
+	HourAngle   float64 // hour angle of the alignment star, hours (0..24)
+	Dec         float64 // declination of the alignment star, degrees
+	ErrorArcsec float64 // error between the star and the model, arcseconds
+	PolarAngle  int     // polar angle of the measured vs modeled star, degrees (0..359, 0=north, 90=east)
+}
+
+// AlignmentPointInfo reads the residual for alignment star n (1..AlignmentStarCount)
+// (:getalpN#). Errors ("E#") if n is out of range. (Firmware ≥ 2.8.15; note a
+// pre-2.15.18 bug can require an Align-Info refresh — see the spec.)
+func (m *Mount) AlignmentPointInfo(n int) (AlignmentPointInfo, error) {
+	s, err := m.Get(fmt.Sprintf(":getalp%d#", n))
+	if err != nil {
+		return AlignmentPointInfo{}, err
+	}
+	s = strings.TrimSpace(s)
+	if s == "E" {
+		return AlignmentPointInfo{}, fmt.Errorf("gotenmicron: alignment star %d out of range", n)
+	}
+	f := strings.Split(s, ",")
+	if len(f) < 4 {
+		return AlignmentPointInfo{}, fmt.Errorf("gotenmicron: short :getalp# reply %q", s)
+	}
+	var info AlignmentPointInfo
+	info.HourAngle, _ = lx200.ParseSexagesimal(f[0])
+	info.Dec, _ = lx200.ParseSexagesimal(f[1])
+	info.ErrorArcsec, _ = strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
+	info.PolarAngle, _ = strconv.Atoi(strings.TrimSpace(f[3]))
+	return info, nil
+}
+
+// DeleteAlignmentStar deletes alignment star n and recomputes the model (:delalstN#).
+// Errors ("0#") if n is out of range or the model cannot be recomputed. (Firmware ≥
+// 2.8.15; the first two stars cannot be deleted before 2.10.6.)
+func (m *Mount) DeleteAlignmentStar(n int) error {
+	s, err := m.Get(fmt.Sprintf(":delalst%d#", n))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(s) != "1" { // "1#" success, "0#" failure
+		return fmt.Errorf("gotenmicron: delete alignment star %d failed (%q)", n, s)
+	}
+	m.invalidate()
+	return nil
+}
+
+// --- Named alignment-model slots (:modelcnt / :modelnam / :modelld / …) ------
+// Save, name, load and delete whole alignment models stored in the mount (firmware ≥
+// 2.13.3). Model names are case-sensitive, at most 15 characters, with trailing spaces
+// ignored, and are escaped on the wire (see escape.go).
+
+// SavedModelCount returns the number of alignment models stored in the mount
+// (:modelcnt#).
+func (m *Mount) SavedModelCount() (int, error) { return m.getInt(":modelcnt#") }
+
+// SavedModelName returns the name of stored model n (1..SavedModelCount) (:modelnamN#).
+// Errors if n is out of range (the mount replies a bare "#").
+func (m *Mount) SavedModelName(n int) (string, error) {
+	s, err := m.Get(fmt.Sprintf(":modelnam%d#", n))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(s) == "" {
+		return "", fmt.Errorf("gotenmicron: no saved model at index %d", n)
+	}
+	return strings.TrimRight(unescapeString(s), " "), nil
+}
+
+// LoadModel loads a stored alignment model by name (:modelld0NAME#).
+func (m *Mount) LoadModel(name string) error {
+	if err := m.modelSlot("modelld0", name, "load"); err != nil {
+		return err
+	}
+	m.invalidate()
+	return nil
+}
+
+// SaveModel stores the current alignment model under a name (:modelsv0NAME#).
+func (m *Mount) SaveModel(name string) error { return m.modelSlot("modelsv0", name, "save") }
+
+// DeleteModel deletes a stored alignment model by name (:modeldel0NAME#).
+func (m *Mount) DeleteModel(name string) error { return m.modelSlot("modeldel0", name, "delete") }
+
+func (m *Mount) modelSlot(verb, name, action string) error {
+	s, err := m.Get(":" + verb + escapeString(name) + "#")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(s) != "1" { // "1#" success, "0#" error
+		return fmt.Errorf("gotenmicron: model %s %q failed (%q)", action, name, s)
+	}
+	return nil
 }
 
 // --- formatters -------------------------------------------------------------

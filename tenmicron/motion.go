@@ -27,6 +27,15 @@ func (m *Mount) SlewToTargetOnSide(side lx200.PierSide) error {
 // limit for keeping the same meridian side (:MSnf#).
 func (m *Mount) SlewToTargetNoFineLimit() error { return m.slewInvalidate(":MSnf#") }
 
+// Nudge moves the mount by an offset from the current position — raAzArcsec arcseconds
+// on the RA/azimuth axis and decAltArcsec on the declination/altitude axis (:NUDGE#). It
+// computes new target coordinates and slews to them (using the LX200 slew reply shape),
+// so it is for re-centering an object after a slew, NOT for autoguiding. (Firmware ≥
+// 2.7.4.)
+func (m *Mount) Nudge(raAzArcsec, decAltArcsec int) error {
+	return m.slewInvalidate(fmt.Sprintf(":NUDGE%+05d,%+05d#", raAzArcsec, decAltArcsec))
+}
+
 // SlewPolarAlign slews missing the target by a computed amount for assisted polar
 // alignment (:MSap#). Requires an active model with ≥2 stars; the model becomes
 // invalid afterwards and should be cleared.
@@ -69,9 +78,10 @@ func (m *Mount) AddAlignmentPoint() error {
 	return nil
 }
 
-// SwapEastWest / SwapNorthSouth invert the manual-move direction sense
-// (:EW#/:NS#).
-func (m *Mount) SwapEastWest() error   { return m.Blind(":EW#") }
+// SwapEastWest inverts the East/West manual-move direction sense (:EW#).
+func (m *Mount) SwapEastWest() error { return m.Blind(":EW#") }
+
+// SwapNorthSouth inverts the North/South manual-move direction sense (:NS#).
 func (m *Mount) SwapNorthSouth() error { return m.Blind(":NS#") }
 
 // Stop halts all movement INCLUDING tracking (:STOP#). Unlike Halt (:Q#, which
@@ -80,12 +90,38 @@ func (m *Mount) Stop() error {
 	if err := m.Blind(":STOP#"); err != nil {
 		return err
 	}
+	m.clearMoving()
 	m.invalidate()
 	return nil
 }
 
 // NoOp sends the do-nothing LX200-compatibility command (:P#).
 func (m *Mount) NoOp() error { return m.Blind(":P#") }
+
+// StopPreHeating stops the motor pre-heating procedure if it is underway (:STOPPH#).
+func (m *Mount) StopPreHeating() error { return m.Blind(":STOPPH#") }
+
+// UserWait stops the mount and blocks further movement until AuthorizeMovement is sent
+// or movement is re-authorized from the keypad (:USERWAIT#). Use it to halt the mount
+// when your software detects an inconsistency; the mount then reports Gstat 11
+// (GstatNeedsUserOK).
+func (m *Mount) UserWait() error {
+	if err := m.Blind(":USERWAIT#"); err != nil {
+		return err
+	}
+	m.invalidate()
+	return nil
+}
+
+// AuthorizeMovement allows the mount to move again after an inconsistency was signaled
+// with UserWait (:USEROK#) — it clears the Gstat 11 "needs user OK" state.
+func (m *Mount) AuthorizeMovement() error {
+	if err := m.Blind(":USEROK#"); err != nil {
+		return err
+	}
+	m.invalidate()
+	return nil
+}
 
 // SlewInProgress reports whether a slew is underway (or ended within the settle
 // time) via :D#, queried directly rather than from the cached :Ginfo status.
@@ -97,18 +133,24 @@ func (m *Mount) SlewInProgress() (bool, error) {
 	return len(s) > 0, nil // "■#" (0x7F) while slewing, "#" → "" when done
 }
 
-// PointingState returns the meridian side the mount reports (:pS#, "East"/"West").
+// PointingState returns the meridian side the mount reports (:pS#, "East"/"West"),
+// applying the southern-hemisphere correction on old firmware (see pierInverted).
 func (m *Mount) PointingState() (lx200.PierSide, error) {
 	s, err := m.Get(":pS#")
 	if err != nil {
 		return lx200.PierUnknown, err
 	}
+	var p lx200.PierSide
 	switch strings.TrimSpace(s) {
 	case "East":
-		return lx200.PierEast, nil
+		p = lx200.PierEast
 	case "West":
-		return lx200.PierWest, nil
+		p = lx200.PierWest
 	default:
 		return lx200.PierUnknown, nil
 	}
+	if m.pierInverted() {
+		p = invertPier(p)
+	}
+	return p, nil
 }

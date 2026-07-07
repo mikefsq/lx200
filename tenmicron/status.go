@@ -21,6 +21,11 @@ func (m *Mount) getInt(cmd string) (int, error) {
 // constants. (Slewing/Tracking/AtPark read the same code cached from :Ginfo#.)
 func (m *Mount) StatusCode() (int, error) { return m.getInt(":Gstat#") }
 
+// TargetTrackable reports whether the currently set target sits where tracking is
+// allowed (:GTTRK#): false when it is below the horizon, or above +89° on an
+// altazimuth mount. The reply is a single status byte with no '#' terminator.
+func (m *Mount) TargetTrackable() (bool, error) { return m.getBoolByte(":GTTRK#") }
+
 // TimeToTrackingEnd estimates the time until tracking stops at a horizon/flip
 // limit (:Gmte#, minutes).
 func (m *Mount) TimeToTrackingEnd() (time.Duration, error) {
@@ -35,10 +40,25 @@ func (m *Mount) SlewSettleTime() (time.Duration, error) {
 	return time.Duration(s * float64(time.Second)), err
 }
 
-// HighAltitudeLimit / LowAltitudeLimit return the slew altitude limits in degrees
-// (:Gh#/:Go#).
+// SetSlewSettleTime sets the post-slew settle time (:Sstm…#, 0..99999 s): after a slew
+// completes, :D#/:GDW# report slewing for this duration (:Gstat# is unaffected).
+func (m *Mount) SetSlewSettleTime(d time.Duration) error { return m.setSettle(":Sstm", d) }
+
+// setSettle formats a settle-time duration as the mount's NNNNN.NNN-second field and
+// sends it as an ack command (:Sstm / :SDstm), rejecting values outside 0..99999 s.
+func (m *Mount) setSettle(cmd string, d time.Duration) error {
+	secs := d.Seconds()
+	if secs < 0 || secs > 99999 {
+		return fmt.Errorf("gotenmicron: settle time %.3fs outside [0, 99999]", secs)
+	}
+	return must(m.Ack(fmt.Sprintf("%s%09.3f#", cmd, secs)))
+}
+
+// HighAltitudeLimit returns the upper slew altitude limit in degrees (:Gh#).
 func (m *Mount) HighAltitudeLimit() (float64, error) { return m.getLimitDeg(":Gh#") }
-func (m *Mount) LowAltitudeLimit() (float64, error)  { return m.getLimitDeg(":Go#") }
+
+// LowAltitudeLimit returns the lower slew altitude limit in degrees (:Go#).
+func (m *Mount) LowAltitudeLimit() (float64, error) { return m.getLimitDeg(":Go#") }
 
 func (m *Mount) getLimitDeg(cmd string) (float64, error) {
 	s, err := m.Get(cmd)
@@ -49,12 +69,14 @@ func (m *Mount) getLimitDeg(cmd string) (float64, error) {
 	return strconv.ParseFloat(s, 64)
 }
 
-// SetHighAltitudeLimit / SetLowAltitudeLimit set the slew altitude limits in whole
-// degrees (:ShsDD#/:SosDD#); the low limit's valid range is −5..+45.
+// SetHighAltitudeLimit sets the upper slew altitude limit in whole degrees (:Shs…#);
+// reports whether the mount accepted it.
 func (m *Mount) SetHighAltitudeLimit(deg int) (bool, error) {
 	return m.Ack(fmt.Sprintf(":Shs%+03d#", deg))
 }
 
+// SetLowAltitudeLimit sets the lower slew altitude limit in whole degrees (:Sos…#, valid
+// range −5..+45); reports whether the mount accepted it.
 func (m *Mount) SetLowAltitudeLimit(deg int) (bool, error) {
 	return m.Ack(fmt.Sprintf(":Sos%+03d#", deg))
 }
@@ -68,21 +90,38 @@ const (
 	MeridianEastOnly  MeridianSide = 3 // only east of meridian (slews end pS=West)
 )
 
-// MeridianSideBehaviour / SetMeridianSideBehaviour get/set the allowed meridian
-// side(s) (:GMF#/:SMFn#). Not applicable to altazimuth mounts.
+// MeridianSideBehaviour reads the allowed meridian side(s) (:GMF#). Not applicable to
+// altazimuth mounts.
 func (m *Mount) MeridianSideBehaviour() (MeridianSide, error) {
 	n, err := m.getInt(":GMF#")
 	return MeridianSide(n), err
 }
 
+// SetMeridianSideBehaviour sets the allowed meridian side(s) (:SMFn#); reports whether
+// the mount accepted it. Not applicable to altazimuth mounts.
 func (m *Mount) SetMeridianSideBehaviour(s MeridianSide) (bool, error) {
 	return m.Ack(fmt.Sprintf(":SMF%d#", int(s)))
 }
 
-// MeridianTrackLimit / MeridianSlewLimit return the meridian limits in degrees
-// (:Glmt#/:Glms#).
+// MeridianTrackLimit returns the meridian tracking limit in degrees (:Glmt#).
 func (m *Mount) MeridianTrackLimit() (int, error) { return m.getInt(":Glmt#") }
-func (m *Mount) MeridianSlewLimit() (int, error)  { return m.getInt(":Glms#") }
+
+// MeridianSlewLimit returns the meridian slew limit in degrees (:Glms#).
+func (m *Mount) MeridianSlewLimit() (int, error) { return m.getInt(":Glms#") }
+
+// SetMeridianTrackLimit sets the meridian limit for tracking in degrees (:Slmt#); its
+// minimum is the slew meridian limit. Reports acceptance. Not settable on AZ2000/4000HPS
+// (the mount returns false there). (Firmware ≥ 2.11.)
+func (m *Mount) SetMeridianTrackLimit(deg int) (bool, error) {
+	return m.Ack(fmt.Sprintf(":Slmt%d#", deg))
+}
+
+// SetMeridianSlewLimit sets the meridian limit for slews in degrees (:Slms#); a value
+// above the tracking limit raises the tracking limit to match. Reports acceptance. Not
+// settable on AZ2000/4000HPS. (Firmware ≥ 2.11.)
+func (m *Mount) SetMeridianSlewLimit(deg int) (bool, error) {
+	return m.Ack(fmt.Sprintf(":Slms%d#", deg))
+}
 
 // UnattendedFlip reports the unattended-flip setting (:Guaf#). Like :h?#, the reply
 // is a single status character with no '#' terminator, so it must be read as one
@@ -118,12 +157,17 @@ func (m *Mount) DestinationSideOfPier() (lx200.PierSide, error) {
 	if err != nil {
 		return lx200.PierUnknown, err
 	}
+	var p lx200.PierSide
 	switch b {
 	case '2':
-		return lx200.PierWest, nil
+		p = lx200.PierWest
 	case '3':
-		return lx200.PierEast, nil
+		p = lx200.PierEast
 	default:
 		return lx200.PierUnknown, nil
 	}
+	if m.pierInverted() { // southern-hemisphere correction on old firmware (see pierInverted)
+		p = invertPier(p)
+	}
+	return p, nil
 }

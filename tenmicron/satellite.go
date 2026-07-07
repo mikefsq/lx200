@@ -185,6 +185,104 @@ func (m *Mount) PrecalcTrajectory() (Transit, error) {
 	return parseTransit(strings.TrimSpace(s))
 }
 
+// --- TLE database (:TLEDN# / :TLEDLn#) --------------------------------------
+
+// DatabaseTLECount returns the number of TLEs stored in the mount's database
+// (:TLEDN#, firmware ≥ 2.13.20).
+func (m *Mount) DatabaseTLECount() (int, error) { return m.getInt(":TLEDN#") }
+
+// LoadDatabaseTLE loads the orbital elements at database index n (1..DatabaseTLECount)
+// and returns the loaded TLE text (:TLEDLn#). Errors if no TLE has that index.
+func (m *Mount) LoadDatabaseTLE(n int) (string, error) {
+	s, err := m.Get(fmt.Sprintf(":TLEDL%d#", n))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(s) == "E" {
+		return "", fmt.Errorf("gotenmicron: no TLE at database index %d", n)
+	}
+	return s, nil
+}
+
+// --- Trajectory replay + real-time offsets (:TRREPLAY# / :TROFF*) -----------
+
+// ReplayTrajectory precalculates the loaded arbitrary trajectory anchored to the
+// current time (:TRREPLAY#) — like PrecalcTrajectory but starting now — and returns its
+// UTC Julian-Date span. Follow it with SlewToTransit. (Firmware ≥ 3.0.)
+func (m *Mount) ReplayTrajectory() (Transit, error) {
+	s, err := m.Get(":TRREPLAY#")
+	if err != nil {
+		return Transit{}, err
+	}
+	if strings.TrimSpace(s) == "E" {
+		return Transit{}, errors.New("gotenmicron: no arbitrary trajectory defined")
+	}
+	return parseTransit(strings.TrimSpace(s))
+}
+
+// TrajectoryOffset selects which real-time offset the :TROFF* commands act on while
+// the mount is following a satellite or arbitrary trajectory.
+type TrajectoryOffset int
+
+const (
+	OffsetAxis1    TrajectoryOffset = 1 // first axis (RA/az), arcsec, ±1800.0
+	OffsetAxis2    TrajectoryOffset = 2 // second axis (Dec/alt), arcsec, ±1800.0
+	OffsetAxis1Sky TrajectoryOffset = 3 // first axis × cos(dec|alt)⁻¹ (constant sky angle), arcsec, ±1800.0
+	OffsetTime     TrajectoryOffset = 4 // time offset, milliseconds, ±1000.0
+)
+
+// AddTrajectoryOffset adds to a trajectory-following offset (:TROFFADDid,±v#): value is
+// arcseconds (ids 1–3, ±1800.0) or milliseconds (id 4, ±1000.0). Errors if the mount
+// is not following a trajectory or the value is out of range. (Firmware ≥ 3.0.)
+func (m *Mount) AddTrajectoryOffset(id TrajectoryOffset, value float64) error {
+	return m.trajOffset("ADD", id, value)
+}
+
+// SetTrajectoryOffset replaces a trajectory-following offset with a new value
+// (:TROFFSETid,±v#); see AddTrajectoryOffset for units and ranges.
+func (m *Mount) SetTrajectoryOffset(id TrajectoryOffset, value float64) error {
+	return m.trajOffset("SET", id, value)
+}
+
+func (m *Mount) trajOffset(verb string, id TrajectoryOffset, value float64) error {
+	s, err := m.Get(fmt.Sprintf(":TROFF%s%d,%+07.1f#", verb, int(id), value))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(s) != "V" { // "V#" applied, "E#" invalid / not following
+		return fmt.Errorf("gotenmicron: trajectory offset %d rejected (%q)", int(id), s)
+	}
+	return nil
+}
+
+// TrajectoryOffsetValue reads the current value of a trajectory-following offset
+// (:TROFFGETid#): arcseconds (ids 1–3) or milliseconds (id 4). Errors on an invalid id.
+// (Firmware ≥ 3.1.4.)
+func (m *Mount) TrajectoryOffsetValue(id TrajectoryOffset) (float64, error) {
+	s, err := m.Get(fmt.Sprintf(":TROFFGET%d#", int(id)))
+	if err != nil {
+		return 0, err
+	}
+	s = strings.TrimSpace(s)
+	if s == "E" {
+		return 0, fmt.Errorf("gotenmicron: invalid trajectory offset id %d", int(id))
+	}
+	return strconv.ParseFloat(s, 64)
+}
+
+// ClearTrajectoryOffsets clears all trajectory-following offsets (:TROFFCLR#). Errors
+// if the mount is not following a trajectory. (Firmware ≥ 3.0.)
+func (m *Mount) ClearTrajectoryOffsets() error {
+	s, err := m.Get(":TROFFCLR#")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(s) != "V" { // "V#" cleared, "E#" not following
+		return errors.New("gotenmicron: not following a trajectory")
+	}
+	return nil
+}
+
 // parseTransit decodes "JDstart,JDend,flags".
 func parseTransit(s string) (Transit, error) {
 	f := strings.Split(s, ",")

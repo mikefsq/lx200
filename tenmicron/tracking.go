@@ -59,12 +59,15 @@ func (m *Mount) SetTrackRate(r TrackRate) error {
 	return nil
 }
 
-// TrackSidereal / TrackLunar / TrackSolar override the core lx200.TrackRater so
-// this dialect uses the documented :RT family. The core's TrackSolar emits :TS#,
-// which is NOT a 10Micron command — hence this override is required, not cosmetic.
+// TrackSidereal selects the sidereal tracking rate (via the :RT family). It overrides
+// the core lx200.TrackRater, whose :TS# form is not a 10Micron command.
 func (m *Mount) TrackSidereal() error { return m.SetTrackRate(TrackSiderealRate) }
-func (m *Mount) TrackLunar() error    { return m.SetTrackRate(TrackLunarRate) }
-func (m *Mount) TrackSolar() error    { return m.SetTrackRate(TrackSolarRate) }
+
+// TrackLunar selects the lunar tracking rate (via the :RT family). See TrackSidereal.
+func (m *Mount) TrackLunar() error { return m.SetTrackRate(TrackLunarRate) }
+
+// TrackSolar selects the solar tracking rate (via the :RT family). See TrackSidereal.
+func (m *Mount) TrackSolar() error { return m.SetTrackRate(TrackSolarRate) }
 
 // SelectCustomTrackRate switches the mount to the custom tracking rate (:TM#);
 // adjust it with IncCustomTrackRate / DecCustomTrackRate.
@@ -87,6 +90,33 @@ func (m *Mount) SetCustomRARate(multiplesOfSidereal float64) error {
 // sidereal speed (:RDsXXX.XXXX#). 0 = no declination drift.
 func (m *Mount) SetCustomDecRate(multiplesOfSidereal float64) error {
 	return must(m.Ack(fmt.Sprintf(":RD%+09.4f#", multiplesOfSidereal)))
+}
+
+// SetCustomTrackRateArcsec sets the custom tracking-rate register to arcsecPerSec
+// arcseconds per second of time (:T…#); activate it with SelectCustomTrackRate (:TM#).
+// The mount's wire value is 4× the rate. Reports whether the mount accepted it.
+func (m *Mount) SetCustomTrackRateArcsec(arcsecPerSec float64) error {
+	return m.setTrackArcsec(":T", arcsecPerSec)
+}
+
+// SetTrackRateArcsec sets the tracking rate directly to arcsecPerSec arcseconds per
+// second of time (:ST…#) — the mount's wire value is 4× the rate. Reports acceptance.
+func (m *Mount) SetTrackRateArcsec(arcsecPerSec float64) error {
+	if err := m.setTrackArcsec(":ST", arcsecPerSec); err != nil {
+		return err
+	}
+	m.invalidate()
+	return nil
+}
+
+// setTrackArcsec sends a custom/direct tracking-rate set (:T / :ST) as the mount's
+// DDD.DDD field = 4× the rate in arcsec/s, and checks the ack byte.
+func (m *Mount) setTrackArcsec(cmd string, arcsecPerSec float64) error {
+	fourX := arcsecPerSec * 4
+	if fourX < 0 || fourX >= 1000 {
+		return fmt.Errorf("gotenmicron: tracking rate %.3f\"/s outside the DDD.DDD field range", arcsecPerSec)
+	}
+	return must(m.Ack(fmt.Sprintf("%s%07.3f#", cmd, fourX)))
 }
 
 // IncCustomTrackRate raises the custom tracking rate by 0.025 arcsec/s (:T+#).

@@ -11,10 +11,9 @@ func TestRateIndexSetters(t *testing.T) {
 		{func(m *Mount) error { return m.SetCenteringRateIndex(3) }, ":RC3#"},
 		{func(m *Mount) error { return m.SetSlewRateIndex(0) }, ":RS0#"},
 		{func(m *Mount) error { return m.SetGuiderPortEnabled(true) }, ":Sge1#"},
-		{func(m *Mount) error { return m.SetGuideRate(7.5) }, ":Rg07.5#"},  // in band, unchanged
-		{func(m *Mount) error { return m.SetGuideRate(20.0) }, ":Rg15.0#"}, // > 1.0× -> clamped to sidereal
-		{func(m *Mount) error { return m.SetGuideRate(0.5) }, ":Rg01.5#"},  // < 0.1× -> clamped to floor
-		{func(m *Mount) error { return m.SetGuideRate(-3) }, ":Rg01.5#"},   // negative -> floor
+		{func(m *Mount) error { return m.SetGuideRate(7.5) }, ":Rg07.500#"},    // 3-decimal, verbatim
+		{func(m *Mount) error { return m.SetGuideRate(15.041) }, ":Rg15.041#"}, // sidereal, sent as-is
+		{func(m *Mount) error { return m.SetGuideRate(0.5) }, ":Rg00.500#"},    // no 0.1× floor now
 	}
 	for _, c := range cases {
 		m, f := newMount(nil)

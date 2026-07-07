@@ -27,6 +27,16 @@ func TestDitheringControls(t *testing.T) {
 	}
 }
 
+func TestSetDitherTimer(t *testing.T) {
+	m, f := newMount(map[string]string{":SditT2,30,60#": "1#"})
+	if ok, err := m.SetDitherTimer(2, 30, 60); err != nil || !ok || f.LastWrite() != ":SditT2,30,60#" {
+		t.Errorf("SetDitherTimer: ok=%v err=%v wrote %q", ok, err, f.LastWrite())
+	}
+	if _, err := m.SetDitherTimer(0, 0, 2); err == nil { // interval < 5
+		t.Errorf("SetDitherTimer(interval 2): want range error")
+	}
+}
+
 func TestDitherParameters(t *testing.T) {
 	m, _ := newMount(map[string]string{":GditP#": "10,5,2,30,60#"})
 	p, err := m.DitherParameters()
