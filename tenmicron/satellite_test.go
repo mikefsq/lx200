@@ -2,6 +2,7 @@ package tenmicron
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,38 @@ func TestTrajectory(t *testing.T) {
 	tr, err := m.PrecalcTrajectory()
 	if err != nil || tr.JDStart != 2459580.60 || tr.Flip {
 		t.Errorf("PrecalcTrajectory = %+v, %v", tr, err)
+	}
+}
+
+func TestTrajectoryOffsetValue(t *testing.T) {
+	m, _ := newMount(map[string]string{":TROFFGET1#": "12.5#"})
+	if v, err := m.TrajectoryOffsetValue(OffsetAxis1); err != nil || v != 12.5 {
+		t.Errorf("TrajectoryOffsetValue = %v, %v; want 12.5", v, err)
+	}
+	// Idle mount (not following a trajectory) replies "E#" for a valid id; the error
+	// must say "not following" — not "invalid id" — so callers/validators classify it
+	// as a benign not-available state rather than a fault.
+	m2, _ := newMount(map[string]string{":TROFFGET1#": "E#"})
+	_, err := m2.TrajectoryOffsetValue(OffsetAxis1)
+	if err == nil || !strings.Contains(err.Error(), "not following") {
+		t.Errorf("TrajectoryOffsetValue(E#) err = %v; want a 'not following' error", err)
+	}
+}
+
+// Regression: ReplayTrajectory must map the "N" (no valid pass) reply to
+// ErrNoSatellitePass, mirroring PrecalcTransit, instead of choking in parseTransit.
+func TestReplayTrajectoryNoPass(t *testing.T) {
+	m, _ := newMount(map[string]string{":TRREPLAY#": "N#"})
+	if _, err := m.ReplayTrajectory(); !errors.Is(err, ErrNoSatellitePass) {
+		t.Errorf("ReplayTrajectory(N) err = %v; want ErrNoSatellitePass", err)
+	}
+	m2, _ := newMount(map[string]string{":TRREPLAY#": "E#"})
+	if _, err := m2.ReplayTrajectory(); err == nil {
+		t.Error("ReplayTrajectory(E) err = nil; want an error")
+	}
+	m3, _ := newMount(map[string]string{":TRREPLAY#": "2461000.100000,2461000.200000,F#"})
+	tr, err := m3.ReplayTrajectory()
+	if err != nil || tr.JDStart != 2461000.1 || !tr.Flip {
+		t.Errorf("ReplayTrajectory(valid) = %+v, %v; want start 2461000.1, flip true", tr, err)
 	}
 }

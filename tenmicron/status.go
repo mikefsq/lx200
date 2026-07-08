@@ -69,16 +69,16 @@ func (m *Mount) getLimitDeg(cmd string) (float64, error) {
 	return strconv.ParseFloat(s, 64)
 }
 
-// SetHighAltitudeLimit sets the upper slew altitude limit in whole degrees (:Shs…#);
+// SetHighAltitudeLimit sets the upper slew altitude limit in whole degrees (:Sh…#);
 // reports whether the mount accepted it.
 func (m *Mount) SetHighAltitudeLimit(deg int) (bool, error) {
-	return m.Ack(fmt.Sprintf(":Shs%+03d#", deg))
+	return m.Ack(fmt.Sprintf(":Sh%+03d#", deg))
 }
 
-// SetLowAltitudeLimit sets the lower slew altitude limit in whole degrees (:Sos…#, valid
+// SetLowAltitudeLimit sets the lower slew altitude limit in whole degrees (:So…#, valid
 // range −5..+45); reports whether the mount accepted it.
 func (m *Mount) SetLowAltitudeLimit(deg int) (bool, error) {
-	return m.Ack(fmt.Sprintf(":Sos%+03d#", deg))
+	return m.Ack(fmt.Sprintf(":So%+03d#", deg))
 }
 
 // MeridianSide selects which side(s) of the meridian the mount may use.

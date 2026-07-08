@@ -150,7 +150,7 @@ type AlignmentPointInfo struct {
 	HourAngle   float64 // hour angle of the alignment star, hours (0..24)
 	Dec         float64 // declination of the alignment star, degrees
 	ErrorArcsec float64 // error between the star and the model, arcseconds
-	PolarAngle  int     // polar angle of the measured vs modeled star, degrees (0..359, 0=north, 90=east)
+	PolarAngle  int     // polar angle of the measured vs modeled star, degrees (0..359, 0=north, 90=east); 0 when the firmware omits the field
 }
 
 // AlignmentPointInfo reads the residual for alignment star n (1..AlignmentStarCount)
@@ -166,14 +166,16 @@ func (m *Mount) AlignmentPointInfo(n int) (AlignmentPointInfo, error) {
 		return AlignmentPointInfo{}, fmt.Errorf("gotenmicron: alignment star %d out of range", n)
 	}
 	f := strings.Split(s, ",")
-	if len(f) < 4 {
+	if len(f) < 3 {
 		return AlignmentPointInfo{}, fmt.Errorf("gotenmicron: short :getalp# reply %q", s)
 	}
 	var info AlignmentPointInfo
 	info.HourAngle, _ = lx200.ParseSexagesimal(f[0])
 	info.Dec, _ = lx200.ParseSexagesimal(f[1])
 	info.ErrorArcsec, _ = strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
-	info.PolarAngle, _ = strconv.Atoi(strings.TrimSpace(f[3]))
+	if len(f) >= 4 { // the polar-angle field is absent on some firmware (e.g. 3.3.4)
+		info.PolarAngle, _ = strconv.Atoi(strings.TrimSpace(f[3]))
+	}
 	return info, nil
 }
 

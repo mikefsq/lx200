@@ -69,3 +69,23 @@ func TestAlignmentInfo(t *testing.T) {
 		t.Errorf("AlignmentInfo(E#) err = %v; want ErrModelTooFewStars", err)
 	}
 }
+
+// Regression: :getalp# returns only 3 fields (no polar angle) on some firmware
+// (e.g. GM1000HPS 3.3.4); AlignmentPointInfo must accept that, not reject as short.
+func TestAlignmentPointInfoThreeFields(t *testing.T) {
+	m, _ := newMount(map[string]string{
+		":getalp1#": "17:25:27.89,+62*56:45.5,10.4#",  // 3 fields, no polar angle
+		":getalp2#": "17:00:00.0,+60*00:00.0,5.0,90#", // 4 fields
+	})
+	i1, err := m.AlignmentPointInfo(1)
+	if err != nil {
+		t.Fatalf("AlignmentPointInfo(1) err = %v; want nil", err)
+	}
+	if i1.ErrorArcsec != 10.4 || i1.PolarAngle != 0 {
+		t.Errorf("3-field: ErrorArcsec=%v PolarAngle=%v; want 10.4, 0", i1.ErrorArcsec, i1.PolarAngle)
+	}
+	i2, err := m.AlignmentPointInfo(2)
+	if err != nil || i2.PolarAngle != 90 {
+		t.Errorf("4-field: PolarAngle=%v err=%v; want 90, nil", i2.PolarAngle, err)
+	}
+}

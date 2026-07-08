@@ -65,3 +65,36 @@ func TestWeatherAutoUpdate(t *testing.T) {
 		t.Errorf("SetWeatherAutoUpdateMode: ok=%v err=%v wrote %q", ok, err, f.LastWrite())
 	}
 }
+
+// Regression: motor-sensor getters map the mount's "not present" replies to
+// ErrTemperatureUnavailable instead of leaking a parse error (found on a GM1000HPS,
+// which has no motor sensors: :GTMPOH# → "Unavailable", :GTMPTH# → a single value).
+func TestMotorSensorsUnavailable(t *testing.T) {
+	m, _ := newMount(map[string]string{
+		":GTMPOH7#": "Unavailable#",
+		":GTMPOH8#": "42.5#",
+		":GTMPTH7#": "Unavailable#",
+		":GTMPTH8#": "-30.0,-20.0,-10.0#",
+	})
+	if _, err := m.MotorOverheatThreshold(TempRAAzMotor); !errors.Is(err, ErrTemperatureUnavailable) {
+		t.Errorf("MotorOverheatThreshold(unavailable) err = %v; want ErrTemperatureUnavailable", err)
+	}
+	if v, err := m.MotorOverheatThreshold(TempDecAltMotor); err != nil || v != 42.5 {
+		t.Errorf("MotorOverheatThreshold = %v, %v; want 42.5, nil", v, err)
+	}
+	if _, _, _, err := m.MotorTemperatureThresholds(TempRAAzMotor); !errors.Is(err, ErrTemperatureUnavailable) {
+		t.Errorf("MotorTemperatureThresholds(unavailable) err = %v; want ErrTemperatureUnavailable", err)
+	}
+	if t0, t1, t2, err := m.MotorTemperatureThresholds(TempDecAltMotor); err != nil || t0 != -30 || t1 != -20 || t2 != -10 {
+		t.Errorf("MotorTemperatureThresholds = %v,%v,%v,%v; want -30,-20,-10,nil", t0, t1, t2, err)
+	}
+}
+
+// Regression: a single-value :GTMPTH# reply (a non-sensor mount) is treated as
+// "feature absent", not a bad-reply parse error.
+func TestMotorThresholdsSingleValue(t *testing.T) {
+	m, _ := newMount(map[string]string{":GTMPTH7#": "+060.0#"})
+	if _, _, _, err := m.MotorTemperatureThresholds(TempRAAzMotor); !errors.Is(err, ErrTemperatureUnavailable) {
+		t.Errorf("MotorTemperatureThresholds(single) err = %v; want ErrTemperatureUnavailable", err)
+	}
+}

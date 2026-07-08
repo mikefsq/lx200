@@ -113,7 +113,14 @@ func (m *Mount) MotorOverheatThreshold(motor TemperatureElement) (float64, error
 	if motor != TempRAAzMotor && motor != TempDecAltMotor {
 		return 0, fmt.Errorf("gotenmicron: overheat threshold needs a motor element (7 or 8), got %d", int(motor))
 	}
-	return m.getFloat(fmt.Sprintf(":GTMPOH%d#", int(motor)))
+	s, err := m.Get(fmt.Sprintf(":GTMPOH%d#", int(motor)))
+	if err != nil {
+		return 0, err
+	}
+	if s = strings.TrimSpace(s); s == "Unavailable" { // no motor sensor on this mount
+		return 0, ErrTemperatureUnavailable
+	}
+	return strconv.ParseFloat(s, 64)
 }
 
 // MotorTemperatureThresholds reads a motor's three low-temperature thresholds T0,T1,T2
@@ -128,14 +135,17 @@ func (m *Mount) MotorTemperatureThresholds(motor TemperatureElement) (t0, t1, t2
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	f := strings.Split(strings.TrimSpace(s), ",")
-	if len(f) != 3 {
-		return 0, 0, 0, fmt.Errorf("gotenmicron: bad :GTMPTH# reply %q", s)
+	s = strings.TrimSpace(s)
+	// Special-purpose mounts reply with the three thresholds; a mount without the
+	// motor sensors answers "Unavailable" or a single value — treat any non-triple
+	// as "feature absent" rather than a parse error.
+	if f := strings.Split(s, ","); len(f) == 3 {
+		t0, _ = strconv.ParseFloat(strings.TrimSpace(f[0]), 64)
+		t1, _ = strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
+		t2, _ = strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
+		return t0, t1, t2, nil
 	}
-	t0, _ = strconv.ParseFloat(strings.TrimSpace(f[0]), 64)
-	t1, _ = strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
-	t2, _ = strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
-	return t0, t1, t2, nil
+	return 0, 0, 0, ErrTemperatureUnavailable
 }
 
 // SetMotorOverheatThreshold sets the overheat threshold T_H (°C, 0..+80) for a motor

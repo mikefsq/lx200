@@ -2,6 +2,7 @@ package tenmicron
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -110,6 +111,15 @@ func TestTrajectoryOffsets(t *testing.T) {
 	}
 	if err := m.ClearTrajectoryOffsets(); err != nil {
 		t.Errorf("ClearTrajectoryOffsets: %v", err)
+	}
+	// Not following a trajectory: Add/Set reply "E#" — the error must say "not
+	// following" (benign), not "rejected", mirroring TrajectoryOffsetValue.
+	m2, _ := newMount(map[string]string{":TROFFADD1,+0005.0#": "E#", ":TROFFSET1,+0005.0#": "E#"})
+	if err := m2.AddTrajectoryOffset(OffsetAxis1, 5.0); err == nil || !strings.Contains(err.Error(), "not following") {
+		t.Errorf("AddTrajectoryOffset(E#) err = %v; want 'not following'", err)
+	}
+	if err := m2.SetTrajectoryOffset(OffsetAxis1, 5.0); err == nil || !strings.Contains(err.Error(), "not following") {
+		t.Errorf("SetTrajectoryOffset(E#) err = %v; want 'not following'", err)
 	}
 }
 
@@ -549,6 +559,14 @@ func TestMountClass(t *testing.T) {
 		if mc := parseMountClass(c.product); mc.AltAz != c.altaz || mc.GM4000 != c.gm4000 {
 			t.Errorf("parseMountClass(%q) = %+v", c.product, mc)
 		}
+	}
+	// MountClass() returns the stored classification verbatim.
+	stored := MountClass{Product: "10micron GM1000HPS"}
+	if got := (&Mount{mountClass: stored}).MountClass(); got != stored {
+		t.Errorf("MountClass() = %+v, want %+v", got, stored)
+	}
+	if got := (&Mount{}).MountClass(); got != (MountClass{}) {
+		t.Errorf("MountClass() on bare Mount = %+v, want zero", got)
 	}
 	if r := (&Mount{mountClass: MountClass{GM4000: true}}).RASlewRatio(); r != 0.75 {
 		t.Errorf("RASlewRatio(GM4000) = %v, want 0.75", r)

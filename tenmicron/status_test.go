@@ -49,11 +49,11 @@ func TestStatusGetters(t *testing.T) {
 }
 
 func TestLimitSetters(t *testing.T) {
-	m, f := newMount(map[string]string{":Shs+85#": "1", ":Sos-05#": "1", ":SMF2#": "1"})
-	if ok, err := m.SetHighAltitudeLimit(85); err != nil || !ok || f.LastWrite() != ":Shs+85#" {
+	m, f := newMount(map[string]string{":Sh+85#": "1", ":So-05#": "1", ":SMF2#": "1"})
+	if ok, err := m.SetHighAltitudeLimit(85); err != nil || !ok || f.LastWrite() != ":Sh+85#" {
 		t.Errorf("SetHighAltitudeLimit: ok=%v err=%v wrote %q", ok, err, f.LastWrite())
 	}
-	if ok, err := m.SetLowAltitudeLimit(-5); err != nil || !ok || f.LastWrite() != ":Sos-05#" {
+	if ok, err := m.SetLowAltitudeLimit(-5); err != nil || !ok || f.LastWrite() != ":So-05#" {
 		t.Errorf("SetLowAltitudeLimit: ok=%v err=%v wrote %q", ok, err, f.LastWrite())
 	}
 	if ok, err := m.SetMeridianSideBehaviour(MeridianWestOnly); err != nil || !ok || f.LastWrite() != ":SMF2#" {

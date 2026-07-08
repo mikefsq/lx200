@@ -13,6 +13,18 @@ func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
 	return &Mount{Conn: lx200.New(f, 200*time.Millisecond)}, f
 }
 
+func TestSetStatusTTL(t *testing.T) {
+	m := &Mount{statusTTL: defaultStatusTTL}
+	m.SetStatusTTL(2 * time.Second)
+	if m.statusTTL != 2*time.Second {
+		t.Errorf("statusTTL = %v, want 2s", m.statusTTL)
+	}
+	m.SetStatusTTL(0) // a poller can disable caching entirely
+	if m.statusTTL != 0 {
+		t.Errorf("statusTTL = %v, want 0", m.statusTTL)
+	}
+}
+
 func TestParseGinfo(t *testing.T) {
 	// RA(hours), Dec(deg), pier, Az, Alt, JD, Gstat, slew
 	s, err := parseGinfo("12.500000,45.250000,W,180.00000,30.00000,2459580.5,6,1")

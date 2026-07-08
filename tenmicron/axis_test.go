@@ -61,3 +61,40 @@ func TestParkPositions(t *testing.T) {
 		t.Errorf("SaveParkPosition(0): want error")
 	}
 }
+
+func TestSlewToRAAxis(t *testing.T) {
+	// Slews to the RA-axis reference: primary(RA)=90°, secondary(Dec)=0°, then :MaX#
+	// (slew-and-STOP, not park).
+	m, f := newMount(map[string]string{
+		":SaXa+090.0000#": "1",
+		":SaXb+000.0000#": "1",
+		":MaX#":           "0",
+	})
+	if err := m.SlewToRAAxis(); err != nil {
+		t.Errorf("SlewToRAAxis: %v", err)
+	}
+	if f.LastWrite() != ":MaX#" {
+		t.Errorf("last write = %q, want :MaX#", f.LastWrite())
+	}
+	// A rejected primary target must surface as an error.
+	m2, _ := newMount(map[string]string{":SaXa+090.0000#": "0"})
+	if err := m2.SlewToRAAxis(); err == nil {
+		t.Error("SlewToRAAxis: primary rejected, want error")
+	}
+}
+
+func TestRotateRAAxis(t *testing.T) {
+	// Rotates only the RA axis: reads current Dec-axis angle, re-targets it unchanged.
+	m, f := newMount(map[string]string{
+		":GaXb#":          "+012.3400#",
+		":SaXa+070.0000#": "1",
+		":SaXb+012.3400#": "1",
+		":MaX#":           "0",
+	})
+	if err := m.RotateRAAxis(70); err != nil {
+		t.Errorf("RotateRAAxis: %v", err)
+	}
+	if f.LastWrite() != ":MaX#" {
+		t.Errorf("last write = %q, want :MaX#", f.LastWrite())
+	}
+}

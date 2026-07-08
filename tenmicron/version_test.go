@@ -42,3 +42,23 @@ func TestVersionAtLeast(t *testing.T) {
 		t.Error("zero Version.atLeast(1.0.0) = true, want false")
 	}
 }
+
+func TestFirmwareVersion(t *testing.T) {
+	m := &Mount{firmware: Version{3, 2, 5}}
+	if got := m.FirmwareVersion(); got != (Version{3, 2, 5}) {
+		t.Errorf("FirmwareVersion() = %s, want 3.2.5", got)
+	}
+	if got := (&Mount{}).FirmwareVersion(); got != (Version{}) {
+		t.Errorf("FirmwareVersion() on bare Mount = %s, want zero", got)
+	}
+	// FirmwareAtLeast is the public wrapper over Version.atLeast.
+	if !m.FirmwareAtLeast(3, 2, 5) {
+		t.Error("FirmwareAtLeast(3.2.5) = false, want true")
+	}
+	if m.FirmwareAtLeast(3, 2, 6) {
+		t.Error("FirmwareAtLeast(3.2.6) = true, want false")
+	}
+	if (&Mount{}).FirmwareAtLeast(1, 0, 0) { // unknown firmware → false
+		t.Error("bare Mount FirmwareAtLeast(1.0.0) = true, want false")
+	}
+}

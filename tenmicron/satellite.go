@@ -214,8 +214,11 @@ func (m *Mount) ReplayTrajectory() (Transit, error) {
 	if err != nil {
 		return Transit{}, err
 	}
-	if strings.TrimSpace(s) == "E" {
+	switch strings.TrimSpace(s) {
+	case "E":
 		return Transit{}, errors.New("gotenmicron: no arbitrary trajectory defined")
+	case "N": // trajectory defined but no valid pass in the window
+		return Transit{}, ErrNoSatellitePass
 	}
 	return parseTransit(strings.TrimSpace(s))
 }
@@ -249,15 +252,16 @@ func (m *Mount) trajOffset(verb string, id TrajectoryOffset, value float64) erro
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(s) != "V" { // "V#" applied, "E#" invalid / not following
-		return fmt.Errorf("gotenmicron: trajectory offset %d rejected (%q)", int(id), s)
+	if strings.TrimSpace(s) != "V" { // "V#" applied, "E#" not following (or invalid id/value)
+		return fmt.Errorf("gotenmicron: trajectory offset %d not applied — not following a trajectory (or invalid id/value)", int(id))
 	}
 	return nil
 }
 
 // TrajectoryOffsetValue reads the current value of a trajectory-following offset
-// (:TROFFGETid#): arcseconds (ids 1–3) or milliseconds (id 4). Errors on an invalid id.
-// (Firmware ≥ 3.1.4.)
+// (:TROFFGETid#): arcseconds (ids 1–3) or milliseconds (id 4). The mount replies "E#"
+// when it is not following a trajectory (or the id is invalid) — the offsets only exist
+// while following, so an idle mount returns "E#" for every id. (Firmware ≥ 3.1.4.)
 func (m *Mount) TrajectoryOffsetValue(id TrajectoryOffset) (float64, error) {
 	s, err := m.Get(fmt.Sprintf(":TROFFGET%d#", int(id)))
 	if err != nil {
@@ -265,7 +269,7 @@ func (m *Mount) TrajectoryOffsetValue(id TrajectoryOffset) (float64, error) {
 	}
 	s = strings.TrimSpace(s)
 	if s == "E" {
-		return 0, fmt.Errorf("gotenmicron: invalid trajectory offset id %d", int(id))
+		return 0, fmt.Errorf("gotenmicron: trajectory offset %d unavailable — not following a trajectory (or invalid id)", int(id))
 	}
 	return strconv.ParseFloat(s, 64)
 }
