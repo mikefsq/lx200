@@ -1,6 +1,9 @@
 # macOS / editor junk
 .DS_Store
 
+cmd/rst/rst
+cmd/tenmicron/tenmicron
+
 # build artifacts (none expected for this pure-Go module; defensive)
 *.dylib
 *.so
