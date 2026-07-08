@@ -39,6 +39,20 @@ func (m *Mount) Park() error {
 	return nil
 }
 
+// SlewToHome sends the mount to its mechanical home and PARKS there (:hP#) — the
+// keypad-defined park position, which on a polar-aligned German mount leaves the OTA
+// pointing up the RA axis (primary axis ≈ 90°, secondary ≈ 0°). It is the same command
+// Park falls back to when no ASCOM park is saved; :hP# returns no reply, so it is Blind.
+// AtPark reads true afterwards, and the axis angles (AxisAnglePrimary/Secondary) report
+// the RA-pole position — the basis for a driver's "at home" indication.
+func (m *Mount) SlewToHome() error {
+	if err := m.Blind(":hP#"); err != nil {
+		return err
+	}
+	m.invalidate()
+	return nil
+}
+
 // Unpark unparks the mount (:PO#), which resumes tracking (lx200.Parker).
 func (m *Mount) Unpark() error {
 	if err := m.Blind(":PO#"); err != nil {

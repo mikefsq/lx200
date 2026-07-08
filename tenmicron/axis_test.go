@@ -83,6 +83,17 @@ func TestSlewToRAAxis(t *testing.T) {
 	}
 }
 
+func TestSlewToHome(t *testing.T) {
+	// :hP# parks the mount at the mechanical home; reply-less, so Blind.
+	m, f := newMount(nil)
+	if err := m.SlewToHome(); err != nil {
+		t.Errorf("SlewToHome: %v", err)
+	}
+	if f.LastWrite() != ":hP#" {
+		t.Errorf("last write = %q, want :hP#", f.LastWrite())
+	}
+}
+
 func TestRotateRAAxis(t *testing.T) {
 	// Rotates only the RA axis: reads current Dec-axis angle, re-targets it unchanged.
 	m, f := newMount(map[string]string{
