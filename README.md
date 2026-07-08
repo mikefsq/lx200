@@ -7,8 +7,7 @@ ZWO AM-series, Rainbow Astro RST, OnStep, and many other telescope mounts.
 Module path: `github.com/mikefsq/lx200`
 
 It is **dependency-light and ASCOM/Alpaca-agnostic**: import it to drive a mount
-in-process. The Alpaca Telescope wrapper lives in a separate module
-(`lx200alpaca`) so this core never pulls in an HTTP server.
+in-process. The Alpaca Telescope wrapper lives in a separate module.
 
 ## Layout
 
@@ -31,7 +30,7 @@ The per-mount packages are LX200 **clients** (they speak `:CMD#` *to* a mount),
 each embedding the core `*lx200.Conn` and adding only its vendor-specific status,
 tracking, park, and site commands. `bridge/` is the **server** direction: it
 *answers* `:CMD#` for an atlas, fronting any `lx200.Mount` — a sibling consumer of
-the mount alongside the Alpaca Telescope wrapper, never a layer over it.
+the mount alongside the Alpaca Telescope wrapper.
 
 ## Design
 
@@ -76,11 +75,10 @@ follow the same pattern.
 | Mount | Transport | Validation |
 |---|---|---|
 | 10Micron | TCP | against hardware |
-| Rainbow RST | serial | reverse-engineered from serial captures |
-| ZWO AM5 | serial / TCP | from the INDI driver + vendor protocol; verify on hardware |
-| OnStep | serial / TCP | from the INDI driver + vendor protocol; verify on hardware |
+| Rainbow RST | serial | against hardware |
+| ZWO AM5 | serial / TCP | from the INDI driver + vendor protocol; wip |
+| OnStep | serial / TCP | from the INDI driver + vendor protocol; wip |
 
 ## License
 
-MIT — see [LICENSE](LICENSE). This is original code; it embeds no vendor
-headers or third-party source.
+MIT — see [LICENSE](LICENSE). 

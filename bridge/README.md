@@ -2,7 +2,8 @@
 
 An LX200 TCP **server** that fronts any `lx200.Mount`, so sky atlases that speak
 the Meade LX200 telescope protocol — **Stellarium**'s TelescopeControl ("Meade
-LX200") and **SkySafari**'s LX200 mode — can drive a mount the fleet already owns.
+LX200") and **SkySafari**'s LX200 mode — can connect to a mount that already has
+a goalpaca driver connected.
 
 It is the protocol inverse of the `lx200` client core: where the core sends
 `:CMD#` frames *to* a mount, the bridge *answers* them. It is a **consumer** of a
@@ -16,14 +17,10 @@ side by side over the same mount, which stays the single source of truth.
   (goalpaca-devices)    LX200 TCP for Stellarium / SkySafari
 ```
 
-Stellarium does **not** speak Alpaca, and ASCOM only on Windows — so on every
-platform this bridge is how Stellarium drives a fleet mount: it connects as a
-plain "Meade LX200" over TCP.
-
 ## State integrity across the two front-ends
 
-Two rules keep an Alpaca-side change and an LX200-side change from fighting over
-the mount:
+The Alpaca-side and LX200-side can conflict with each other. There is no protection
+from slewing the mount while mid exposure. 
 
 - **No cached device state.** Every `:GR#`/`:GD#`/`:GA#`/`:GZ#` reads *live* from
   the `Mount`. A slew started over Alpaca is immediately visible to the atlas, and
@@ -90,10 +87,4 @@ tenmicron -addr 10.0.1.51:3492 -port 11200 -lx200-port 4030
 | `:D#`              | slewing status (non-empty while moving)             |
 | `:U#`              | precision toggle (no-op; always high precision)     |
 
-NexStar (SkySafari's other mode) is the same semantics over different framing and
-can be added as a second front-end over the same `MountFunc` without touching the
-LX200 path.
 
-> **Status:** unit-tested against a fake mount (incl. a concurrency test proving
-> the two front-ends can't corrupt the target register); **not yet hardware-tested**
-> against a live Stellarium/SkySafari + mount.
