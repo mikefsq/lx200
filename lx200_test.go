@@ -2,6 +2,7 @@ package lx200
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,5 +120,44 @@ func TestBlindAndTimeout(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("timeout took %v, expected ~150ms", d)
+	}
+}
+
+// TestGetMatching: the atomic resync skips leading non-matching pushes (an async
+// completion token ahead of the real reply) and returns the first message accept
+// approves, forwarding each skipped one — the primitive the RST dialect relies on to
+// stay in sync when a second front-end (the LX200 bridge) shares the mount.
+func TestGetMatching(t *testing.T) {
+	c, f := newFake(map[string]string{":GR#": ":GR12:00:00#"})
+	f.rbuf = append(f.rbuf, ":MM0#"...) // a stray token sits ahead of the reply
+	var skipped []string
+	accept := func(r string) bool { return strings.HasPrefix(r, ":GR") }
+	s, err := c.GetMatching(":GR#", accept, func(r string) { skipped = append(skipped, r) }, 3)
+	if err != nil {
+		t.Fatalf("GetMatching: %v", err)
+	}
+	if s != ":GR12:00:00" {
+		t.Errorf("reply = %q, want :GR12:00:00", s)
+	}
+	if len(skipped) != 1 || skipped[0] != ":MM0" {
+		t.Errorf("skipped = %v, want [:MM0]", skipped)
+	}
+
+	// maxSkip cap: with no message ever accepted, the last one read is returned
+	// best-effort after maxSkip skips (so the caller can still parse/trim it).
+	_, f2 := newFake(nil)
+	c2 := New(f2, 150*time.Millisecond)
+	f2.rbuf = append(f2.rbuf, ":A#:B#:C#:D#"...)
+	skipped = nil
+	s, err = c2.GetMatching(":X#", func(string) bool { return false },
+		func(r string) { skipped = append(skipped, r) }, 2)
+	if err != nil {
+		t.Fatalf("GetMatching (cap): %v", err)
+	}
+	if s != ":C" {
+		t.Errorf("capped reply = %q, want :C (last read after 2 skips)", s)
+	}
+	if strings.Join(skipped, ",") != ":A,:B" {
+		t.Errorf("skipped = %v, want [:A :B]", skipped)
 	}
 }

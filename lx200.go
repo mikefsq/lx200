@@ -158,6 +158,41 @@ func (c *Conn) Await(timeout time.Duration) (string, error) {
 	return c.readUntil('#', timeout)
 }
 
+// GetMatching sends a query and returns the first '#'-terminated reply for which
+// accept reports true, forwarding each earlier non-matching message to skip. It is
+// for mounts (Rainbow RST) that interleave unsolicited completion tokens with query
+// replies: an async token (:MM0#/:CHO#) can land in the buffer just ahead of the
+// real reply, so the reply must be found by matching, not by position.
+//
+// The whole write-and-resync runs under one lock hold. Doing the same with a Get
+// followed by Await — two separate lock acquisitions — leaves a gap a concurrent
+// command on another goroutine can wedge into, writing its own command and stealing
+// the matching reply (then everyone reads one reply off, and the missing reply
+// surfaces as a spurious ErrTimeout). Holding the lock across the resync makes it
+// safe when several front-ends share one mount, e.g. the Alpaca Telescope wrapper
+// and the LX200 bridge polling the same RST. At most maxSkip non-matching messages
+// are consumed; if none matches, the last one read is returned so the caller can
+// parse it best-effort (the pre-existing behavior).
+func (c *Conn) GetMatching(cmd string, accept func(string) bool, skip func(string), maxSkip int) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.write(cmd); err != nil {
+		return "", err
+	}
+	for i := 0; ; i++ {
+		s, err := c.readUntil('#', c.timeout)
+		if err != nil {
+			return "", err
+		}
+		if accept(s) || i >= maxSkip {
+			return s, nil
+		}
+		if skip != nil {
+			skip(s)
+		}
+	}
+}
+
 // Slew runs a slew-initiating command (classically :MS#). The mount replies '0'
 // if the slew started, or a non-'0' digit followed by a '#'-terminated reason;
 // Slew returns nil on success or an error carrying that reason.

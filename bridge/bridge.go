@@ -74,9 +74,13 @@ type Server struct {
 	cachedProduct string // mount's real :GVP# once read (static; avoids a live round-trip per query)
 
 	// Cached site/offset facts the bridge re-formats into Meade dialect for site and
-	// date/time queries. Read from the mount once (they're static), so the queries
-	// answer instantly — a tight-timeout client (iOS Stellarium) can't tolerate a live
-	// round-trip per identify. Refreshed when a client sets them.
+	// date/time queries. Read from the mount lazily on the first client query that
+	// needs them (they're static) and cached thereafter, so only that first identify
+	// pays a round-trip and every later one answers from cache. Deliberately NOT
+	// pre-warmed at startup: the bridge shares the mount's serial line with the Alpaca
+	// driver, and a background poll racing the driver's just-connected, still-settling
+	// link bounced the connection. The bridge now touches the mount only when a client
+	// actually asks. Refreshed when a client sets them.
 	siteLat, siteLon  float64       // degrees; longitude East-positive
 	utcOff            time.Duration // hours added to local time to obtain UTC
 	haveSite, haveOff bool
@@ -134,7 +138,6 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.ln = ln
 	s.mu.Unlock()
 	go func() { <-ctx.Done(); _ = ln.Close() }()
-	go s.warmCache(ctx) // pre-read site/offset so the first client identify is instant
 
 	for {
 		conn, err := ln.Accept()
@@ -342,9 +345,12 @@ func (s *Server) productName() string {
 // Clients like iOS Stellarium read site coordinates and date/time at connect and need
 // them in classic Meade format (DDD*MM#, MM/DD/YY#, sHH#) — the mount's native LX200
 // dialect (':' separators, ISO dates, signed longitude) doesn't parse. The bridge
-// reads the static facts (site, UTC offset) from the mount once and re-formats them;
-// date/time come from the box clock shifted by the offset (the box runs at the site's
-// zone). All answered instantly — a tight-timeout client can't wait for a round-trip.
+// reads the static facts (site, UTC offset) from the mount lazily — on the first
+// client query that needs them — and re-formats them; date/time come from the box
+// clock shifted by the offset (the box runs at the site's zone). Only the first such
+// query pays a round-trip; it is cached, so every later one answers instantly. The
+// bridge intentionally does no background polling, so it never contends with the
+// Alpaca driver for the mount's serial line when no client is asking.
 
 // site returns the cached observing-site lat/lon (degrees, lon East-positive), reading
 // and caching them from the mount on first use. ok is false until a SiteReader mount is
@@ -402,24 +408,6 @@ func (s *Server) offset() time.Duration {
 	s.utcOff, s.haveOff = d, true
 	s.mu.Unlock()
 	return d
-}
-
-// warmCache pre-reads the static site/offset so the first client identify answers
-// instantly instead of paying a live round-trip. Retries until the mount is reachable.
-func (s *Server) warmCache(ctx context.Context) {
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
-	for {
-		if _, _, ok := s.site(); ok {
-			s.offset()
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
 }
 
 // localNow is the observing-site wall clock: box UTC minus the site's offset (offset =

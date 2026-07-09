@@ -333,20 +333,24 @@ func (m *Mount) Fault() string {
 // It also resyncs past a stray unsolicited completion token: when a slew or home
 // finishes, the mount pushes :MM0#/:CHO# asynchronously, and if that lands in the
 // buffer just before our reply — a window drainToken's peek can miss — a plain read
-// would return the token ("CHO") and a coordinate parse would blow up. So if the
-// reply does not carry our command's echoed prefix, we consume it (applying it to
-// slew/home/park state) and read the real reply.
+// would return the token ("CHO") and a coordinate parse would blow up. So if a reply
+// does not carry our command's echoed prefix, we consume it (applying it to slew /
+// home / park state) and read on for the real reply.
+//
+// The write and the skip-past-token resync run as one atomic step (GetMatching holds
+// the command lock across the whole thing). That matters because this mount is shared
+// by two front-ends — the Alpaca wrapper and the LX200 bridge — that poll it
+// concurrently: a resync split across two lock acquisitions would let the other
+// front-end's command slip in between and steal our real reply, surfacing as a
+// spurious read timeout that tears the connection down.
 func (m *Mount) get(cmd, prefix string) (string, error) {
 	m.maybeCaptureHome() // capture a home deferred by an earlier :CHO, before this read
-	s, err := m.Get(cmd)
+	s, err := m.GetMatching(cmd,
+		func(r string) bool { return strings.HasPrefix(r, prefix) },
+		m.applyToken, // route a stray :MM…/:CH… token; ignore anything else
+		3)
 	if err != nil {
 		return "", err
-	}
-	for tries := 0; tries < 3 && !strings.HasPrefix(s, prefix); tries++ {
-		m.applyToken(s) // route a stray :MM…/:CH… token; ignore anything else
-		if s, err = m.Await(0); err != nil {
-			return "", err
-		}
 	}
 	return strings.TrimPrefix(s, prefix), nil
 }
