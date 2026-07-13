@@ -1,6 +1,6 @@
 module github.com/mikefsq/lx200
 
-go 1.25.0
+go 1.23
 
 require go.bug.st/serial v1.6.1
 
