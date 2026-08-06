@@ -21,6 +21,7 @@ lx200/
 ├── tenmicron/        10Micron GM-series      (TCP)
 ├── am5/              ZWO AM3/AM5/AM5N/AM7     (USB-serial or WiFi/TCP)
 ├── rst/              Rainbow Astro RST-135/300 (USB-serial)
+│   └── boot/         RST firmware flashing over its Microchip AN1388 bootloader
 ├── onstep/           OnStep / OnStepX        (USB-serial or WiFi/TCP)
 └── bridge/           LX200 TCP *server* — the protocol inverse: serves a Mount
                       to Stellarium / SkySafari (see bridge/README.md)
@@ -69,6 +70,24 @@ m, err := am5.Open("/dev/tty.usbserial-XXXX") // USB-serial …
 
 `rst.Open` / `rst.Find` (auto-detect by USB id) and `onstep.Open` / `onstep.Dial`
 follow the same pattern.
+
+### Flashing RST firmware
+
+`rst/boot` and `cmd/rstflash` replace the vendor's Windows-only
+`HUBOi_Firmware_Downloader.exe` — which is Microchip's stock PIC32UBL (AN1388)
+host, rebranded. The controller enters its bootloader only when powered on with
+**PREV and NEXT held**; nothing in software puts it there.
+
+```
+rstflash -check RST-135E_260319.hex   # parse and summarise the file; opens no port
+rstflash -info                        # report the bootloader version
+rstflash RST-135E_260319.hex          # erase, program, verify (prompts first)
+```
+
+Flashing erases the application firmware before writing. An interrupted flash
+leaves the mount unbootable until a flash completes; retry with PREV+NEXT held.
+The protocol is reverse-engineered from the vendor tool and unit-tested against a
+loopback bootloader, but has **not** been run against a mount.
 
 ## Status
 
