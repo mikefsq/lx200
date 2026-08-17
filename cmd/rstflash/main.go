@@ -10,7 +10,6 @@
 //	rstflash -info                          # connect and report the bootloader version
 //	rstflash RST-135E_260319.hex            # flash, with a confirmation prompt
 //	rstflash -y -serial /dev/cu.usbserial-X RST-135E_260319.hex
-//
 package main
 
 import (

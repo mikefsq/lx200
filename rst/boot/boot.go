@@ -3,7 +3,6 @@
 //
 // Power the hand controller on while holding PREV and NEXT, then Connect
 // polls READ_BOOT_INFO until it answers.
-//
 package boot
 
 import (
@@ -31,11 +30,11 @@ const (
 
 // Per-command retry counts and reply timeouts, taken from the vendor downloader.
 const (
-	connectRetryEvery = 200 * time.Millisecond
-	eraseTimeout      = 5 * time.Second
-	programTimeout    = 500 * time.Millisecond
-	verifyTimeout     = 5 * time.Second
-	commandRetries    = 3
+	connectRetryEvery     = 200 * time.Millisecond
+	eraseTimeout          = 5 * time.Second
+	programTimeout        = 500 * time.Millisecond
+	verifyTimeout         = 5 * time.Second
+	commandRetries        = 3
 	DefaultConnectTimeout = 6 * time.Second //user might have to power-cycle the controller.
 )
 

@@ -1,10 +1,8 @@
 # lx200
 
-A transport-agnostic Go library for the Meade **LX200** command protocol family —
-the `:CMD#`-framed serial/TCP dialect spoken (with vendor extensions) by 10Micron,
-ZWO AM-series, Rainbow Astro RST, OnStep, and many other telescope mounts.
-
-Module path: `github.com/mikefsq/lx200`
+A transport-agnostic Go library for the Meade **LX200** command protocol family 
+implementing the `:CMD#`-framed serial/TCP dialect spoken (with vendor extensions)
+by 10Micron, ZWO AM-series, Rainbow Astro RST, OnStep, and many other telescope mounts.
 
 It is **dependency-light and ASCOM/Alpaca-agnostic**: import it to drive a mount
 in-process. The Alpaca Telescope wrapper lives in a separate module.
@@ -30,23 +28,20 @@ lx200/
 The per-mount packages are LX200 **clients** (they speak `:CMD#` *to* a mount),
 each embedding the core `*lx200.Conn` and adding only its vendor-specific status,
 tracking, park, and site commands. `bridge/` is the **server** direction: it
-*answers* `:CMD#` for an atlas, fronting any `lx200.Mount` — a sibling consumer of
-the mount alongside the Alpaca Telescope wrapper.
+*answers* `:CMD#` for an atlas, fronting any `lx200.Mount`.
 
 ## Design
 
-- **Framing.** Every LX200 reply is one of four shapes, selected by the primitive
-  you call: `Blind` (no reply — `:Q#`, `:Mn#`), `Ack` (one byte `0`/`1` — the
-  `:Sr`/`:Sd`/`:St…` set commands), `Get` (read until `#` — the `:Gx#` queries),
-  and `Slew` (`:MS#` → `0` started, else a `#`-terminated fault). Commands are
-  serialized and bounded by a read deadline.
-- **Capabilities.** `Mount` is the contract every per-mount type satisfies.
-  Features not all mounts share — park/unpark, find-home, side-of-pier, alt/az,
-  pulse-guide, per-axis move, track-rate select, site geometry, UTC clock — are
-  small optional interfaces a consumer type-asserts for, so a driver advertises
-  exactly what the hardware supports.
+- **Framing.** Every LX200 command is serialized and bounded by a read deadline. 
+  The reply is one of four kinds: `Blind` (no reply — `:Q#`, `:Mn#`),
+  `Ack` (one byte `0`/`1`, `:Sr`/`:Sd`/`:St…` set commands),
+  `Get` (read until `#` — the `:Gx#` queries),
+  and `Slew` (`:MS#` → `0` started, else a `#`-terminated fault). 
+- **Capabilities.** Not all mounts implement park/unpark, find-home, side-of-pier,
+  alt/az, pulse-guide, per-axis move, track-rate select, site geometry, UTC clock so 
+  a driver advertises the hardware capabilities.
 - **Transports.** TCP (`DialTCP`, e.g. 10Micron) and serial (`serial.Open`, for
-  USB/RS-232). A TCP-only build never links the serial library.
+  USB/RS-232).
 
 ## Usage
 
@@ -100,4 +95,4 @@ loopback bootloader, but has **not** been run against a mount.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). 
+MIT — see [LICENSE](LICENSE).
