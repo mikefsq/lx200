@@ -236,15 +236,16 @@ func TestEncoderRatePair(t *testing.T) {
 
 // The remaining commands, each with a real reply where one exists.
 
-// FindHome stops tracking first: with tracking on, :Ch# aborts and pushes a :CH< fail token.
+// FindHome checks the busy flag, then stops tracking, then seeks. Tracking has to go first
+// because with it on, :Ch# aborts and pushes a :CH< fail token.
 func TestFindHomeStopsTrackingFirst(t *testing.T) {
 	m, f := newMount(map[string]string{":CtL#": ":CTL#"})
 	if err := m.FindHome(); err != nil {
 		t.Fatalf("FindHome: %v", err)
 	}
 	w := f.Writes()
-	if len(w) < 2 || w[0] != ":CtL#" || w[1] != ":Ch#" {
-		t.Errorf("FindHome wrote %q; want :CtL# then :Ch#", w)
+	if len(w) < 3 || w[0] != ":AH#" || w[1] != ":CtL#" || w[2] != ":Ch#" {
+		t.Errorf("FindHome wrote %q; want :AH# then :CtL# then :Ch#", w)
 	}
 	if slewing, _ := m.Slewing(); !slewing {
 		t.Error("FindHome should latch slewing until the :CHO# token arrives")

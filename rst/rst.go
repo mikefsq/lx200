@@ -257,15 +257,20 @@ func Find() (*Mount, error) {
 }
 
 // Filter narrows which ports Find considers.
+//
+// Pinning Serial is the only way to keep the scan off a neighbour's port. There is deliberately
+// no exclusion list: one existed, built from ports that were probed and stayed silent, and it
+// blacklisted the mount itself. A mount is silent for the first few seconds after a power cycle,
+// while its USB bridge has already re-enumerated, so an ordinary power cycle was enough to
+// record it as "not an RST" — permanently, since the list was persisted. Silence does not
+// distinguish a neighbour from a mount that is not talking yet.
 type Filter struct {
-	Serial  string   // bind only this USB bridge serial; empty = any candidate
-	Exclude []string // bridge serials known not to be an RST; never opened
+	Serial string // bind only this USB bridge serial; empty = any candidate
 }
 
 // Report is what a search learned, for a caller that wants to remember it.
 type Report struct {
-	Serial   string   // the USB bridge serial the mount was found on ("" if unknown)
-	Rejected []string // bridge serials opened, asked, and found not to be an RST
+	Serial string // the USB bridge serial the mount was found on ("" if unknown)
 }
 
 // FindMatching opens the RST that satisfies f, and reports what it learned on the way.
@@ -283,35 +288,30 @@ func FindMatching(f Filter) (*Mount, Report, error) {
 		return nil, rep, fmt.Errorf("rainbow: no RST mount found (FTDI 0403:6001)")
 	}
 	for _, c := range cands {
-		ok, asked := probeRST(c.Name)
-		if ok {
+		if probeRST(c.Name) {
 			rep.Serial = c.SerialNumber
 			m, err := Open(c.Name)
 			return m, rep, err
-		}
-		// A busy port is in use right now, which says nothing about what is behind it.
-		if asked && c.SerialNumber != "" {
-			rep.Rejected = append(rep.Rejected, c.SerialNumber)
 		}
 	}
 	return nil, rep, fmt.Errorf("rainbow: no RST mount answered on %d candidate port(s) (FTDI 0403:6001)", len(cands))
 }
 
-// probeRST reports whether an RST answers on portName, and whether the port could be asked at all.
-func probeRST(portName string) (isRST, asked bool) {
+// probeRST reports whether an RST answers on portName.
+func probeRST(portName string) bool {
 	m, err := openRaw(portName, probeTimeout)
 	if err != nil {
-		return false, false // busy (another driver holds it) or not openable
+		return false // busy (another driver holds it) or not openable
 	}
 	defer m.Close()
 	// An RST already in the Rainbow dialect answers :AV# without anything being written to it,
 	// which matters because this runs against ports belonging to other instruments.
 	if _, err := m.Version(); err == nil {
-		return true, true
+		return true
 	}
 	m.selectDialect()
 	_, err = m.Version()
-	return err == nil, true
+	return err == nil
 }
 
 // findPort picks the RST's serial port from an enumerated list, or returns "" if nothing
@@ -335,16 +335,12 @@ func candidatePorts(ports []serial.PortInfo) []string {
 
 // candidates returns the ports worth asking, best first, after applying f.
 func candidates(ports []serial.PortInfo, f Filter) []serial.PortInfo {
-	excluded := make(map[string]bool, len(f.Exclude))
-	for _, s := range f.Exclude {
-		excluded[strings.ToLower(strings.TrimSpace(s))] = true
-	}
 	keep := func(p serial.PortInfo) bool {
-		sn := strings.ToLower(strings.TrimSpace(p.SerialNumber))
-		if f.Serial != "" {
-			return sn == strings.ToLower(strings.TrimSpace(f.Serial))
+		if f.Serial == "" {
+			return true
 		}
-		return sn == "" || !excluded[sn]
+		sn := strings.ToLower(strings.TrimSpace(p.SerialNumber))
+		return sn == strings.ToLower(strings.TrimSpace(f.Serial))
 	}
 	var out []serial.PortInfo
 	for _, p := range ports {
@@ -683,7 +679,14 @@ func (m *Mount) AddAlignmentPoint() error {
 }
 
 // Halt stops motion (:Q#) and ends both the goto and the continuous-move state.
+//
+// Refused while a home seek is running: :Q# sets the flag that seek is polling, and interrupting
+// it can leave the mount's homing guard set until a power cycle. See refuseWhileHoming. A seek
+// runs at a fixed rate and ends by itself; there is no safe way to cut it short over the wire.
 func (m *Mount) Halt() error {
+	if err := m.refuseWhileHoming("halt"); err != nil {
+		return err
+	}
 	if err := m.Blind(":Q#"); err != nil {
 		return err
 	}
@@ -786,12 +789,30 @@ func (m *Mount) TrackMode() (TrackMode, error) {
 
 // --- Homer (:Ch#, completion via :CHO#) --------------------------------------
 
+// ErrHoming is returned by an operation refused because a home seek is already running.
+var ErrHoming = errors.New("rainbow: a home seek is already running")
+
 // FindHome seeks the mount's mechanical home (:Ch#), stopping tracking first. Completion
 // arrives asynchronously as a :CHO# token, which latches HomeFound.
 //
 // The seek runs at a fixed rate the slew presets do not affect, and the mount reports its
 // starting position for almost the whole run. Poll Slewing, not the coordinates.
+//
+// Refused when :AH# says a seek is already running, because :Ch# is blind and the firmware
+// discards a re-entrant one in silence: the handler tests that flag first and returns without
+// answering. Sent regardless, the driver would latch Slewing waiting for a token the mount is
+// never going to send. Observed on hardware.
 func (m *Mount) FindHome() error {
+	// Read before writing. A stuck busy flag is the case this catches, and it is not
+	// recoverable over the wire, so saying so plainly beats a three-minute silent wait.
+	busy, err := m.Homing()
+	if err != nil {
+		return fmt.Errorf("rainbow: cannot tell whether a home seek is running: %w", err)
+	}
+	if busy {
+		return fmt.Errorf("%w (:AH1); it clears when the seek returns, and a seek interrupted "+
+			"part-way can leave it set until the mount is power-cycled", ErrHoming)
+	}
 	// With tracking on, :Ch# aborts and pushes a :CH< fail token. Best-effort; this also
 	// consumes the :CTL# echo.
 	_ = m.track(":CtL#")
@@ -800,6 +821,25 @@ func (m *Mount) FindHome() error {
 	}
 	m.setSlewing(true)
 	return nil
+}
+
+// refuseWhileHoming reports an error when the mount is mid-home-seek.
+//
+// The seek is a single synchronous call inside the firmware's :Ch# handler, and the busy flag
+// that guards re-entry is cleared only when that call returns. Commands delivered into it write
+// the globals it is looping on — :Q# sets the seek's own abort flag, a goto moves the axes it is
+// driving — and on the development mount a goto plus three halts arriving mid-seek left the flag
+// set permanently, with :Ch# a silent no-op afterwards and only a power cycle to clear it.
+//
+// A read failure is not treated as busy: refusing a halt because a status read failed would be
+// worse than the collision it guards against.
+func (m *Mount) refuseWhileHoming(op string) error {
+	busy, err := m.Homing()
+	if err != nil || !busy {
+		return nil
+	}
+	return fmt.Errorf("rainbow: %s refused: %w — interrupting a seek can wedge the mount's "+
+		"homing flag until it is power-cycled; wait for it to finish", op, ErrHoming)
 }
 
 // AtHome reports whether the mount is at its mechanical home, by reading the axis angles from
@@ -850,12 +890,30 @@ const parkDec = 89 + 59.0/60.0
 // AxisAngles.
 //
 // Tracking is stopped twice, before the slew and again once it arrives, because an equatorial
-// goto starts tracking at the target. See maybeFinishPark.
+// goto turns tracking on. See maybeFinishPark.
+//
+// A mount already on the polar axis is latched without slewing at all. That is not only an
+// optimisation: a goto to where the mount already is produces no completion token on this
+// firmware, so the driver would wait for one that never comes, leave slewing latched, and never
+// run the deferred tracking-off — the mount then sits tracking and drifts off the park.
+// Observed on hardware, and reachable in one click from a Park/Unpark toggle, since Unpark
+// leaves the tube exactly where it was.
 func (m *Mount) Park() error {
 	if err := m.requireHome("park"); err != nil {
 		return err
 	}
+	if err := m.refuseWhileHoming("park"); err != nil {
+		return err
+	}
 	_ = m.SetTracking(false) // stow with tracking off (like FindHome)
+	// Checked AFTER tracking is stopped, because tracking turns the RA axis and this reads the
+	// axis angles. An error here is not fatal: fall through and slew, which is always correct.
+	if at, err := m.AtPark(); err == nil && at {
+		m.mu.Lock()
+		m.unparked = false // nothing to move; the state is all that changes
+		m.mu.Unlock()
+		return nil
+	}
 	// The target is a MOUNT ORIENTATION expressed in the sky frame, so it has to be recomputed
 	// from the clock every time: RA = LST - 6h is a different RA every park, and the one thing
 	// that stays fixed is the hour angle, and the axis follows the hour angle.
@@ -894,14 +952,12 @@ func (m *Mount) SiteLatitude() (float64, error) {
 	return lx200.ParseSexagesimal(s)
 }
 
-// Unpark clears the parked state and re-enables tracking. It does not move the mount, so the
-// tube stays on the polar axis and AtPark, which reads the axes, keeps reporting true. AlpacaAtPark is the one that honours this, which is the ASCOM contract: parked is a
-// state a client leaves, not only a place the mount sits.
+// Unpark clears the parked state.
 func (m *Mount) Unpark() error {
 	m.mu.Lock()
 	m.unparked = true
 	m.mu.Unlock()
-	return m.SetTracking(true)
+	return nil
 }
 
 // AtPark reports whether the mount is stowed along its polar axis, by reading the mechanical

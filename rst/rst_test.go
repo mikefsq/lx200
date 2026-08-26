@@ -1,6 +1,7 @@
 package rst
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -15,6 +16,14 @@ import (
 func newMount(replies map[string]string) (*Mount, *lx200test.Fake) {
 	// No reply is seeded for the slew commands: an accepted slew answers nothing, and only a
 	// refusal speaks. A test that wants a refusal supplies it.
+	// :AH# defaults to "no seek running". FindHome, Halt and Park all read it before acting, and
+	// a test that is not about that guard should not have to seed it; one that is, overrides it.
+	if replies == nil {
+		replies = map[string]string{}
+	}
+	if _, ok := replies[":AH#"]; !ok {
+		replies[":AH#"] = ":AH0#"
+	}
 	f := lx200test.New(replies)
 	// Default to homed, since most tests exercise slews. TestRequireHomeGate covers the
 	// un-homed path.
@@ -375,11 +384,10 @@ func TestTrackRatesAndPark(t *testing.T) {
 	m, f := newMount(map[string]string{
 		":CtR#":           ":CTR#",        // echoed track command
 		":CtL#":           ":CTL#",        // Park -> SetTracking(false)
-		":CtA#":           ":CTA#",        // Unpark -> SetTracking(true)
 		":GS#":            ":GS16:00:00#", // LST -> target RA = LST - 6h = 10h
 		":Sr10:00:00.0#":  "1",
 		":Sd+89*59'00.0#": "1",
-		":CY#":            parkedAxes, // the axis angles a completed park leaves
+		":CY#":            awayAxes, // away from the park, so Park slews rather than latching
 	})
 	if err := m.TrackSidereal(); err != nil || f.LastWrite() != ":CtR#" {
 		t.Errorf("TrackSidereal wrote %q, want :CtR#", f.LastWrite())
@@ -392,6 +400,7 @@ func TestTrackRatesAndPark(t *testing.T) {
 	if p, _ := m.AlpacaAtPark(); p {
 		t.Error("AlpacaAtPark = true before the completion token")
 	}
+	f.SetReply(":CY#", parkedAxes) // the slew has carried the axes onto the polar axis
 	f.Push(":MM0#")
 	time.Sleep(peekTTL)
 	if sl, _ := m.Slewing(); sl { // drains the token, latching parked
@@ -528,33 +537,35 @@ func TestCandidatesFilter(t *testing.T) {
 	if got := join(names(candidates(ports, Filter{}))); got != "/dev/ttyUSB0,/dev/ttyUSB2" {
 		t.Errorf("no filter = %s, want both 6001 bridges", got)
 	}
-	// A rejected serial is skipped without being opened at all.
-	if got := join(names(candidates(ports, Filter{Exclude: []string{"AG0JWD3W"}}))); got != "/dev/ttyUSB2" {
-		t.Errorf("excluded = %s, want only ttyUSB2", got)
-	}
-	// Case and stray whitespace must not defeat it; these round-trip through a JSON file.
-	if got := join(names(candidates(ports, Filter{Exclude: []string{" ag0jwd3w "}}))); got != "/dev/ttyUSB2" {
-		t.Errorf("excluded case-insensitively = %s, want only ttyUSB2", got)
-	}
-	// A pin selects exactly one.
+	// A pin selects exactly one, and matches case-insensitively: the value round-trips through
+	// a config file an operator may well have typed by hand.
 	if got := join(names(candidates(ports, Filter{Serial: "a10klc4k"}))); got != "/dev/ttyUSB2" {
 		t.Errorf("pinned = %s, want only ttyUSB2", got)
+	}
+	if got := join(names(candidates(ports, Filter{Serial: " A10KLC4K "}))); got != "/dev/ttyUSB2" {
+		t.Errorf("pinned with whitespace = %s, want only ttyUSB2", got)
 	}
 	if got := candidates(ports, Filter{Serial: "NOSUCH"}); len(got) != 0 {
 		t.Errorf("pinned to an absent serial = %v, want none", names(got))
 	}
-	// Excluding everything plausible leaves nothing, rather than falling back to a rejected port.
-	if got := candidates(ports, Filter{Exclude: []string{"AG0JWD3W", "A10KLC4K"}}); len(got) != 0 {
-		t.Errorf("all excluded = %v, want none", names(got))
-	}
 }
 
-// A port with no reported serial cannot be excluded, since there is nothing to key on, so it
-// must stay a candidate. That is the macOS case, where no USB metadata is reported.
+// A pin is the only thing that narrows the scan, and it is absolute: a port that does not match
+// is never opened, whatever else is on the bus.
+//
+// There is no exclusion list any more. One existed, learned from ports that were probed and
+// answered nothing, and it blacklisted the mount: a mount is silent for the first few seconds
+// after a power cycle while its USB bridge has already re-enumerated, so an ordinary power cycle
+// recorded it as "not an RST" and it was never opened again. Silence cannot tell a neighbour
+// from a mount that is not talking yet.
 func TestCandidatesKeepsUnidentifiablePorts(t *testing.T) {
 	ports := []serial.PortInfo{{Name: "/dev/cu.usbserial-1410", IsUSB: true}}
-	if got := candidates(ports, Filter{Exclude: []string{"AG0JWD3W"}}); len(got) != 1 {
+	if got := candidates(ports, Filter{}); len(got) != 1 {
 		t.Errorf("port with no serial = %v, want it kept", got)
+	}
+	// It has no serial to match, so a pin cannot select it either.
+	if got := candidates(ports, Filter{Serial: "A10KLC4K"}); len(got) != 0 {
+		t.Errorf("port with no serial under a pin = %v, want none", got)
 	}
 }
 
@@ -951,11 +962,12 @@ func TestParkStopsTrackingAfterTheSlewArrives(t *testing.T) {
 		":GS#":            ":GS16:00:00#",
 		":Sr10:00:00.0#":  "1",
 		":Sd+89*59'00.0#": "1",
-		":CY#":            parkedAxes,
+		":CY#":            awayAxes, // away from the park, so Park slews
 	})
 	if err := m.Park(); err != nil {
 		t.Fatalf("Park: %v", err)
 	}
+	f.SetReply(":CY#", parkedAxes) // arrived
 	// One :CtL# so far, the pre-slew one. The mount is still moving and the goto has not yet
 	// turned tracking back on.
 	if n := countWrites(f, ":CtL#"); n != 1 {
@@ -994,7 +1006,7 @@ func TestANewSlewCancelsAPendingParkStop(t *testing.T) {
 		":Sd+89*59'00.0#": "1",
 		":Sr20:00:00.0#":  "1",
 		":Sd+30*00'00.0#": "1",
-		":CY#":            parkedAxes,
+		":CY#":            awayAxes, // away from the park, so Park slews
 	})
 	if err := m.Park(); err != nil {
 		t.Fatalf("Park: %v", err)
@@ -1029,4 +1041,124 @@ func countWrites(f *lx200test.Fake, cmd string) int {
 		}
 	}
 	return n
+}
+
+// A mount already on the polar axis is latched without slewing.
+//
+// This is not a shortcut, it is the fix for a wedge. A goto to where the mount already is draws
+// no completion token from this firmware, so the driver waited forever for one: slewing stayed
+// latched, the deferred tracking-off never ran, and the mount sat tracking and drifted off the
+// park. Observed on hardware. Park/Unpark/Park reaches it in two clicks, because Unpark leaves
+// the tube exactly where it was.
+func TestParkAtTheParkPositionSkipsTheGoto(t *testing.T) {
+	m, f := newMount(map[string]string{
+		":CtL#": ":CTL#",
+		":CY#":  parkedAxes,
+	})
+	m.mu.Lock()
+	m.unparked = true // as an Unpark leaves it: at the park position, not in the parked state
+	m.mu.Unlock()
+
+	if err := m.Park(); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	for _, w := range f.Writes() {
+		switch w {
+		case ":MS#", ":GS#":
+			t.Errorf("Park wrote %q from the park position; a zero-distance goto never completes", w)
+		}
+	}
+	if n := countWrites(f, ":CtL#"); n != 1 {
+		t.Errorf("%d :CtL# want 1 — tracking must still be stopped, just without a slew", n)
+	}
+	if sl, _ := m.Slewing(); sl {
+		t.Error("Slewing latched with no slew in flight")
+	}
+	if at, err := m.AlpacaAtPark(); err != nil || !at {
+		t.Errorf("AlpacaAtPark = %v, %v; want true — the state is what Park changed", at, err)
+	}
+}
+
+// Away from the park it still slews, so the skip is a special case and not the rule.
+func TestParkAwayFromTheParkPositionStillSlews(t *testing.T) {
+	m, f := newMount(map[string]string{
+		":CtL#":           ":CTL#",
+		":GS#":            ":GS16:00:00#",
+		":Sr10:00:00.0#":  "1",
+		":Sd+89*59'00.0#": "1",
+		":CY#":            awayAxes,
+	})
+	if err := m.Park(); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+	if f.LastWrite() != ":MS#" {
+		t.Errorf("Park final write %q, want :MS#", f.LastWrite())
+	}
+}
+
+// A home seek in flight blocks the commands that can interfere with it.
+//
+// The seek is one synchronous call inside the firmware's :Ch# handler, and the busy flag that
+// guards re-entry is cleared only when that call returns. Commands delivered into it write the
+// globals it is looping on, and on the development mount a goto plus three halts arriving
+// mid-seek left the flag set for good: :Ch# became a silent no-op and only a power cycle
+// cleared it. Nothing in the protocol writes that flag, so there is no recovery over the wire.
+func TestCommandsThatCanWedgeAHomeSeekAreRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		do   func(*Mount) error
+	}{
+		{"FindHome", func(m *Mount) error { return m.FindHome() }},
+		{"Halt", func(m *Mount) error { return m.Halt() }},
+		{"Park", func(m *Mount) error { return m.Park() }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m, f := newMount(map[string]string{
+				":AH#":  ":AH1#", // a seek is running
+				":CtL#": ":CTL#",
+				":CY#":  awayAxes,
+			})
+			err := c.do(m)
+			if !errors.Is(err, ErrHoming) {
+				t.Fatalf("%s = %v; want ErrHoming", c.name, err)
+			}
+			for _, w := range f.Writes() {
+				switch w {
+				case ":Ch#", ":Q#", ":MS#":
+					t.Errorf("%s wrote %q while a seek was running", c.name, w)
+				}
+			}
+		})
+	}
+}
+
+// :Ch# is blind, so a re-entrant one the firmware discards is indistinguishable from one it
+// accepted. Latching Slewing on it leaves the driver waiting out its full timeout for a token
+// that is never coming, which is what a stuck busy flag looked like on hardware.
+func TestFindHomeRefusedWhileBusyDoesNotLatchSlewing(t *testing.T) {
+	m, _ := newMount(map[string]string{":AH#": ":AH1#", ":CtL#": ":CTL#"})
+	if err := m.FindHome(); !errors.Is(err, ErrHoming) {
+		t.Fatalf("FindHome = %v; want ErrHoming", err)
+	}
+	if sl, _ := m.Slewing(); sl {
+		t.Error("Slewing latched on a :Ch# the firmware discarded")
+	}
+}
+
+// A failed :AH# read must not refuse a halt. Blocking a stop because a status read failed is
+// worse than the collision the guard exists to prevent.
+func TestHaltProceedsWhenTheBusyFlagCannotBeRead(t *testing.T) {
+	m, f := newMount(map[string]string{":AH#": "garbage#"})
+	if err := m.Halt(); err != nil {
+		t.Fatalf("Halt: %v", err)
+	}
+	var sawQ bool
+	for _, w := range f.Writes() {
+		if w == ":Q#" {
+			sawQ = true
+		}
+	}
+	if !sawQ {
+		t.Errorf("Halt wrote %q; want :Q# despite the unreadable busy flag", f.Writes())
+	}
 }

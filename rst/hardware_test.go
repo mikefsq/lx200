@@ -24,7 +24,7 @@ func TestAgainstHardware(t *testing.T) {
 		var rep Report
 		m, rep, err = FindMatching(Filter{})
 		if err == nil {
-			t.Logf("probe          rejected %v", rep.Rejected)
+			t.Logf("probe          found on bridge %q", rep.Serial)
 			// Find is the no-filter wrapper over the same path; open and close it once so the
 			// whole discovery chain is exercised.
 			if m2, ferr := Find(); ferr == nil {

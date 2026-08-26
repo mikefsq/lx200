@@ -31,6 +31,10 @@ func TestAlpacaAtHomeEqualsAtHome(t *testing.T) {
 // Arriving is not parked. parkedAxes is a real :CY# reading from a completed park.
 const parkedAxes = ":CY+089.98/-000.03#"
 
+// awayAxes is a reading well clear of both the park and home signatures, for tests that need
+// Park to take its slewing path rather than the already-there one.
+const awayAxes = ":CY+045.00/-010.00#"
+
 func TestAlpacaAtParkIsFalseWhileSlewing(t *testing.T) {
 	m, _ := newMount(map[string]string{":CY#": parkedAxes})
 
@@ -46,7 +50,7 @@ func TestAlpacaAtParkIsFalseWhileSlewing(t *testing.T) {
 // Unpark does not move the mount, so AtPark still reads the park position. A client asking
 // whether it is parked means the state, not the place.
 func TestAlpacaAtParkHonoursUnpark(t *testing.T) {
-	m, _ := newMount(map[string]string{":CY#": parkedAxes, ":CtA#": ":CTA#"})
+	m, _ := newMount(map[string]string{":CY#": parkedAxes})
 	if at, err := m.AlpacaAtPark(); err != nil || !at {
 		t.Fatalf("AlpacaAtPark = %v, %v; want true on the polar axis", at, err)
 	}
@@ -93,14 +97,28 @@ func TestAlpacaParkIsIdempotent(t *testing.T) {
 
 // Unparking an unparked mount is a no-op, not an error.
 func TestAlpacaUnparkIsIdempotent(t *testing.T) {
-	m, f := newMount(map[string]string{":CY#": ":CY+045.00/-010.00#"}) // not on the polar axis
+	m, _ := newMount(map[string]string{":CY#": ":CY+045.00/-010.00#"}) // not on the polar axis
 	if err := m.AlpacaUnpark(); err != nil {
 		t.Fatalf("AlpacaUnpark on an unparked mount: %v", err)
 	}
-	for _, w := range f.Writes() {
-		if w == ":CtA#" {
-			t.Error("AlpacaUnpark re-enabled tracking on an already unparked mount")
-		}
+}
+
+// Unpark is a state change and does not start tracking
+func TestUnparkSendsNothingAndLeavesTrackingAlone(t *testing.T) {
+	m, f := newMount(map[string]string{":CY#": parkedAxes})
+	if err := m.Unpark(); err != nil {
+		t.Fatalf("Unpark: %v", err)
+	}
+	if w := f.Writes(); len(w) != 0 {
+		t.Errorf("Unpark wrote %v; it must send nothing", w)
+	}
+	// The state changed even though nothing went out on the wire.
+	if at, err := m.AlpacaAtPark(); err != nil || at {
+		t.Errorf("AlpacaAtPark = %v, %v after Unpark; want false", at, err)
+	}
+	// ... and the axes still report the park position, which is the deliberate divergence.
+	if at, err := m.AtPark(); err != nil || !at {
+		t.Errorf("AtPark = %v, %v after Unpark; the tube has not moved", at, err)
 	}
 }
 
