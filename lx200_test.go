@@ -1,6 +1,7 @@
 package lx200
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -143,20 +144,23 @@ func TestGetMatching(t *testing.T) {
 		t.Errorf("skipped = %v, want [:MM0]", skipped)
 	}
 
-	// maxSkip cap: with no message ever accepted, the last one read is returned
-	// best-effort after maxSkip skips (so the caller can still parse/trim it).
+	// maxSkip cap: when nothing is ever accepted, GetMatching must ERROR rather than hand back
+	// the last unmatched frame. Returning ":C" best-effort was a footgun — the caller cannot
+	// tell it from a real reply and mis-parses it, which surfaced as a wrong coordinate and an
+	// intermittently-wrong AtPark right after connect.
 	_, f2 := newFake(nil)
 	c2 := New(f2, 150*time.Millisecond)
 	f2.rbuf = append(f2.rbuf, ":A#:B#:C#:D#"...)
 	skipped = nil
 	s, err = c2.GetMatching(":X#", func(string) bool { return false },
 		func(r string) { skipped = append(skipped, r) }, 2)
-	if err != nil {
-		t.Fatalf("GetMatching (cap): %v", err)
+	if !errors.Is(err, ErrNoMatch) {
+		t.Fatalf("GetMatching (cap) err = %v, want ErrNoMatch", err)
 	}
-	if s != ":C" {
-		t.Errorf("capped reply = %q, want :C (last read after 2 skips)", s)
+	if s != "" {
+		t.Errorf("capped reply = %q, want empty on ErrNoMatch", s)
 	}
+	// It still skipped exactly maxSkip frames before giving up.
 	if strings.Join(skipped, ",") != ":A,:B" {
 		t.Errorf("skipped = %v, want [:A :B]", skipped)
 	}

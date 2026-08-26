@@ -1,16 +1,8 @@
 // Command rst is a low-level interactive console for Rainbow Astro RST harmonic
-// mounts (RST-135/300), talking the lx200/rst serial dialect directly — no Alpaca,
-// no fleet. It is the bench tool for bringing the RST driver up: the RST protocol
-// is reverse-engineered from app captures and has never been exercised against real
-// hardware, so this console exposes both the raw LX200 primitives (to poke the
-// mount and see exactly what it echoes) and the typed rst.Mount API (to validate
-// each library method against the wire).
+// mounts (RST-135/300), talking the lx200/rst serial dialect directly. It is a
+// CLI tool for controlling the RST mount. This console exposes both the raw
+// LX200 primitives and the typed rst.Mount API.
 //
-// Two raw layers matter for the RST's quirks: it echoes the command prefix on
-// queries (:GR# -> :GR20:28:56.9#), answers "set" commands with a single '1'/'0'
-// byte, sends nothing to "blind" commands, and pushes an unsolicited completion
-// token (:MM0# / :CHO#) when a slew or home finishes. The g/a/b/w verbs map onto
-// exactly those four reply shapes so you can classify any command by hand.
 //
 // Usage:
 //
@@ -186,7 +178,7 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		reportF(m.SiteLongitude())
 	case "sitename":
 		if len(args) != 1 {
-			fmt.Println("usage: sitename <1-4>")
+			fmt.Println("usage: sitename <1-3>  (:GP# is the precision mode, not a fourth name)")
 			return
 		}
 		n, _ := strconv.Atoi(args[0])
@@ -335,11 +327,20 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		}
 		waitSlew(m)
 	case "park":
+		fmt.Println("parking (equatorial goto to HA +6h / Dec +89*59' — RA axis to 0, tube on top)...")
 		if err := m.Park(); err != nil {
 			fmt.Printf("err: %v\n", err)
 			return
 		}
 		waitSlew(m)
+		// The mechanical angles are the check that matters: the sky position is the same
+		// whatever the RA axis does, so only :CY# can tell a top-up park from the old
+		// tube-on-the-left one. RA axis near 0 = landed; near -80 = it did not.
+		if dec, ra, err := m.AxisAngles(); err != nil {
+			fmt.Printf("  axes: %v\n", err)
+		} else {
+			fmt.Printf("  axes: DEC %.2f°  RA %.2f°   (want DEC ~90, RA ~0)\n", dec, ra)
+		}
 	case "unpark":
 		reportErr(m.Unpark())
 	case "halt", "stop":
@@ -372,6 +373,153 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		moveAxis(m, args)
 	case "pulse":
 		pulse(m, args)
+
+	// --- identity and configuration ---------------------------------------
+	case "serial":
+		report(m.SerialNumber())
+	case "model":
+		report(m.ModelName())
+	case "gear":
+		ra, dec, err := m.GearRatio()
+		reportPair(ra, dec, err)
+	case "worm":
+		ra, dec, err := m.WormCount()
+		reportPair(ra, dec, err)
+	case "precision":
+		if len(args) == 1 {
+			reportErr(m.SetPrecision(strings.EqualFold(args[0], "high") || args[0] == "H"))
+			return
+		}
+		report(m.Precision())
+	case "echo":
+		if len(args) != 1 {
+			fmt.Println("usage: echo on|off   (:SPE#/:SPF# — off breaks prefix matching)")
+			return
+		}
+		reportErr(m.EchoPrefix(args[0] == "on"))
+	case "clockformat":
+		if len(args) == 1 {
+			n, err := strconv.Atoi(args[0])
+			if err != nil {
+				fmt.Println("usage: clockformat [12|24]")
+				return
+			}
+			reportErr(m.SetClockFormat(n))
+			return
+		}
+		v, err := m.ClockFormat()
+		reportF(float64(v), err)
+
+	// --- targets and limits -----------------------------------------------
+	case "target":
+		ra, err1 := m.TargetRA()
+		dec, err2 := m.TargetDec()
+		az, alt, err3 := m.TargetAltAz()
+		if err := firstErr(err1, err2, err3); err != nil {
+			fmt.Println("err:", err)
+			return
+		}
+		fmt.Printf("  RA %.4f  Dec %.4f  Az %.3f  Alt %.3f\n", ra, dec, az, alt)
+	case "axes":
+		dec, ra, err := m.AxisAngles()
+		if err != nil {
+			fmt.Println("err:", err)
+			return
+		}
+		fmt.Printf("  DEC axis %.2f°   RA axis %.2f°   (:CY#)\n", dec, ra)
+	case "limits":
+		v, err := m.SlewLimits()
+		if err != nil {
+			fmt.Println("err:", err)
+			return
+		}
+		fmt.Printf("  %v\n", v)
+	case "homing":
+		report(boolStr(m.Homing()))
+	case "polepos":
+		az, alt, err := m.PolePosition()
+		if err != nil {
+			fmt.Println("err:", err)
+			return
+		}
+		fmt.Printf("  Az %.3f  Alt %.3f\n", az, alt)
+
+	// --- clock ------------------------------------------------------------
+	case "setutc":
+		reportErr(m.SetUTC(time.Now().UTC()))
+	case "setlocaltime":
+		reportErr(m.SetLocalTime(time.Now()))
+	case "setutcoffset":
+		if len(args) != 1 {
+			fmt.Println("usage: setutcoffset <whole hours, e.g. -7>")
+			return
+		}
+		h, err := strconv.Atoi(args[0])
+		if err != nil {
+			fmt.Println("usage: setutcoffset <whole hours>")
+			return
+		}
+		reportErr(m.SetUTCOffset(time.Duration(h) * time.Hour))
+
+	// --- rates ------------------------------------------------------------
+	case "axisrate":
+		if len(args) != 1 {
+			fmt.Printf("usage: axisrate <deg/s>   vendor rates: %v\n", rst.AxisRates())
+			return
+		}
+		v, err := strconv.ParseFloat(args[0], 64)
+		if err != nil {
+			fmt.Println("usage: axisrate <deg/s>")
+			return
+		}
+		reportErr(m.SetAxisRate(v))
+	case "setslewspeed":
+		if len(args) != 2 {
+			fmt.Println("usage: setslewspeed <1-3> <xSidereal>   (slot 3 is what :RS# and a goto use)")
+			return
+		}
+		n, err1 := strconv.Atoi(args[0])
+		v, err2 := strconv.Atoi(args[1])
+		if err := firstErr(err1, err2); err != nil {
+			fmt.Println("usage: setslewspeed <1-3> <xSidereal>")
+			return
+		}
+		reportErr(m.SetSlewSpeed(n, v))
+
+	// --- catalogue --------------------------------------------------------
+	case "messier", "ngc", "star":
+		if len(args) != 1 {
+			fmt.Printf("usage: %s <number>   (loads the object into the goto target)\n", verb)
+			return
+		}
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			fmt.Printf("usage: %s <number>\n", verb)
+			return
+		}
+		switch verb {
+		case "messier":
+			reportErr(m.SelectMessier(n))
+		case "ngc":
+			reportErr(m.SelectNGC(n))
+		default:
+			reportErr(m.SelectStar(n))
+		}
+	case "siteslot":
+		if len(args) == 1 {
+			n, err := strconv.Atoi(args[0])
+			if err != nil {
+				fmt.Println("usage: siteslot [n]")
+				return
+			}
+			reportErr(m.SelectSiteSlot(n))
+			return
+		}
+		report(m.SiteSlot())
+
+	// --- the ASCOM contract surface ---------------------------------------
+	case "alpaca":
+		alpacaStatus(m)
 
 	case "help", "?", "h":
 		help()
@@ -603,9 +751,28 @@ typed reads:
 
 gps / clock / site / telemetry:
   gps                dump position+clock     lst  localtime  date  utcoffset
-  sitelat sitelon    sitename <1-4>
+  sitelat sitelon    sitename <1-3>   siteslot
   sysstatus          motorload  autoresume
   guiderate  setguiderate <x>  slewspeed <1-3>  forceflip on|off
+  serial model gear worm            identity and factory calibration
+  precision [high|low]  echo on|off clockformat [12|24]
+  setutc  setlocaltime  setutcoffset <hours>
+
+rates:
+  axisrate <deg/s>   program the speed slot AND select it (what MoveAxis needs)
+  setslewspeed <1-3> <xSidereal>    slot 3 is what :RS# and a goto use
+
+targets, limits, catalogue:
+  target             read back the goto target (RA/Dec and Az/Alt)
+  axes               mechanical axis angles (:CY# — DEC axis / RA axis)
+  limits             the six slew-limit registers (:CA#..:CF#)
+  polepos            where Park sends the mount
+  messier <n>  ngc <n>  star <n>    load a catalogue object into the target
+  siteslot [n]       which stored site :Sg/:St write into
+
+state:
+  homing             is a home seek RUNNING (:AH#) — not "at home"
+  alpaca             the ASCOM home/park contract vs the mount's own answers
 
 target + goto:
   sr <hours>         set target RA
@@ -627,4 +794,44 @@ manual motion:
 
   help   quit
 `)
+}
+
+// reportPair prints a two-field reply like :AG#'s gear ratio or :AP#'s worm count.
+func reportPair(a, b int, err error) {
+	if err != nil {
+		fmt.Println("err:", err)
+		return
+	}
+	fmt.Printf("  %d / %d\n", a, b)
+}
+
+// firstErr returns the first non-nil error, so a multi-read verb can fail once.
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// boolStr adapts a bool-returning read to report's (string, error) shape.
+func boolStr(v bool, err error) (string, error) { return fmt.Sprint(v), err }
+
+// AtHome reads the MECHANICAL axis angles (:CY#), not Az/Alt — see homeDecAxis in the driver.
+// 'axes' prints the same numbers raw when this disagrees with what you expect.
+func alpacaStatus(m *rst.Mount) {
+	ah, err1 := m.AlpacaAtHome()
+	ap, err2 := m.AlpacaAtPark()
+	rawHome, err3 := m.AtHome()
+	rawPark, err4 := m.AtPark()
+	if err := firstErr(err1, err2, err3, err4); err != nil {
+		fmt.Println("err:", err)
+		return
+	}
+	fmt.Printf("  AlpacaAtHome %-5v                        AtHome %-5v  (homed + :CY# axes at 0/0)\n", ah, rawHome)
+	fmt.Printf("  AlpacaAtPark %-5v                        AtPark %-5v\n", ap, rawPark)
+	fmt.Printf("  HomeFound    %-5v  (homed since power-on)\n", m.HomeFound())
+	fmt.Printf("  can: findhome=%v park=%v unpark=%v setpark=%v\n",
+		m.AlpacaCanFindHome(), m.AlpacaCanPark(), m.AlpacaCanUnpark(), m.AlpacaCanSetPark())
 }

@@ -11,9 +11,7 @@ import (
 	"time"
 )
 
-// TestCRC16 pins the checksum against the standard CRC-16/XMODEM vector —
-// polynomial 0x1021, initial value 0, not reflected — which is what AN1388's
-// nibble-wise table computes.
+// The checksum is CRC-16/XMODEM: polynomial 0x1021, initial value 0, not reflected.
 func TestCRC16(t *testing.T) {
 	if got := CRC16([]byte("123456789")); got != 0x31C3 {
 		t.Errorf("CRC16(123456789) = 0x%04X; want 0x31C3", got)
@@ -26,11 +24,11 @@ func TestCRC16(t *testing.T) {
 	}
 }
 
-// TestEncodeFrameEscapes is the framing regression: SOH/EOT are written raw, but
-// a payload or CRC byte equal to SOH, EOT or DLE must be preceded by DLE.
+// SOH and EOT are written raw, but a payload or CRC byte equal to SOH, EOT or DLE must be
+// preceded by DLE.
 func TestEncodeFrameEscapes(t *testing.T) {
-	// READ_BOOT_INFO exercises both escape sites at once: the payload byte 0x01
-	// is itself SOH, and its CRC (0x1021) has a high byte equal to DLE.
+	// READ_BOOT_INFO exercises both escape sites at once: its payload byte is itself SOH, and
+	// its CRC has a high byte equal to DLE.
 	got := encodeFrame([]byte{0x01})
 	want := []byte{soh, dle, 0x01, 0x21, dle, 0x10, eot}
 	if !bytes.Equal(got, want) {
@@ -44,7 +42,7 @@ func TestEncodeFrameEscapes(t *testing.T) {
 	}
 }
 
-// TestRoundTrip: anything encodeFrame produces, the decoder must recover.
+// Anything encodeFrame produces, the decoder must recover.
 func TestRoundTrip(t *testing.T) {
 	payloads := [][]byte{
 		{0x01},
@@ -67,7 +65,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDecoderRejectsBadCRC: a corrupted frame must not surface as a reply.
+// A corrupted frame must not surface as a reply.
 func TestDecoderRejectsBadCRC(t *testing.T) {
 	frame := encodeFrame([]byte{0x02})
 	frame[len(frame)-2] ^= 0xFF // corrupt the CRC high byte
@@ -90,7 +88,7 @@ func TestDecoderRejectsBadCRC(t *testing.T) {
 	}
 }
 
-// TestDecoderSkipsNoise: line noise before SOH must not corrupt the frame.
+// Line noise before SOH must not corrupt the frame.
 func TestDecoderSkipsNoise(t *testing.T) {
 	var d decoder
 	var got []byte
@@ -140,8 +138,8 @@ func TestParseHex(t *testing.T) {
 	}
 }
 
-// TestParseHexGapsAreErased: unwritten bytes inside the range must checksum as
-// 0xFF, matching erased flash — otherwise Verify fails against a good device.
+// Unwritten bytes inside the range must checksum as 0xFF, matching erased flash, or Verify
+// fails against a good device.
 func TestParseHexGapsAreErased(t *testing.T) {
 	src := ":020000041D00DD\r\n" +
 		":0100000011EE\r\n" + // one byte at 0x9D000000
@@ -159,8 +157,7 @@ func TestParseHexGapsAreErased(t *testing.T) {
 	}
 }
 
-// TestParseHexExcludesBootFlash: config-word records at 0x1FC00000 are streamed
-// to the device but must not move the verified range.
+// Config-word records are streamed to the device but must not move the verified range.
 func TestParseHexExcludesBootFlash(t *testing.T) {
 	src := ":020000041D00DD\r\n" +
 		":0400000012345678E8\r\n" +
@@ -179,8 +176,7 @@ func TestParseHexExcludesBootFlash(t *testing.T) {
 	}
 }
 
-// TestParseHexLargeRecord: a record carrying more than 251 data bytes must not
-// wrap the byte arithmetic that slices its payload.
+// A record carrying more than 251 data bytes must not wrap the arithmetic slicing its payload.
 func TestParseHexLargeRecord(t *testing.T) {
 	data := make([]byte, 255)
 	for i := range data {
@@ -219,8 +215,8 @@ func TestParseHexRejectsCorruption(t *testing.T) {
 
 // --- client -----------------------------------------------------------------
 
-// fakeDevice is a loopback bootloader: it decodes command frames and replies
-// with whatever the test's handler returns.
+// fakeDevice is a loopback bootloader: it decodes command frames and replies with whatever the
+// test's handler returns.
 type fakeDevice struct {
 	mu      sync.Mutex
 	dec     decoder
@@ -259,11 +255,11 @@ func (f *fakeDevice) Read(p []byte) (int, error) {
 
 func (f *fakeDevice) Close() error { return nil }
 
-// echo replies with just the command byte — the bootloader's ack shape.
+// echo replies with just the command byte, the bootloader's ack shape.
 func echo(cmd Command, _ []byte) []byte { return []byte{byte(cmd)} }
 
-// TestConnectRetries: the mount is only in its bootloader after the user
-// power-cycles it, so Connect must keep polling through silence.
+// The mount is only in its bootloader after a power cycle, so Connect must poll through
+// silence.
 func TestConnectRetries(t *testing.T) {
 	var n int
 	dev := &fakeDevice{handler: func(cmd Command, _ []byte) []byte {
@@ -288,8 +284,7 @@ func TestConnectTimeout(t *testing.T) {
 	}
 }
 
-// TestProgramChunking: records must be batched 11 to a frame, concatenated as
-// raw binary behind the command byte.
+// Records must be batched 11 to a frame, concatenated as raw binary behind the command byte.
 func TestProgramChunking(t *testing.T) {
 	img, err := ParseHex(strings.NewReader(bigHex(25)))
 	if err != nil {
@@ -319,8 +314,8 @@ func TestProgramChunking(t *testing.T) {
 	}
 }
 
-// TestVerify pins the READ_CRC argument layout: addr and length little-endian
-// u32, then the host's expected CRC little-endian u16.
+// The READ_CRC argument layout: address and length as little-endian u32, then the expected CRC
+// as little-endian u16.
 func TestVerify(t *testing.T) {
 	img, err := ParseHex(strings.NewReader(sampleHex))
 	if err != nil {
@@ -342,8 +337,8 @@ func TestVerify(t *testing.T) {
 	}
 }
 
-// TestErasedCRC: the chunked erased-flash checksum must equal the direct one,
-// since family detection compares against it.
+// The chunked erased-flash checksum must equal the direct one, since family detection compares
+// against it.
 func TestErasedCRC(t *testing.T) {
 	for _, n := range []uint32{0, 1, 4096, 8192, 8193, 0x6100} {
 		buf := bytes.Repeat([]byte{0xFF}, int(n))
@@ -353,8 +348,8 @@ func TestErasedCRC(t *testing.T) {
 	}
 }
 
-// TestDetectAppBase: a device with code below the 150H base is a 135-family
-// controller; one that reads erased there is a 150H/400.
+// A device with code below the 150H base is a 135-family controller; one that reads erased
+// there is a 150H or 400.
 func TestDetectAppBase(t *testing.T) {
 	const span = AppBase150 - AppBase135
 
@@ -392,7 +387,7 @@ func TestVerifyMismatch(t *testing.T) {
 	}
 }
 
-// TestWriteErrorNotRetried: a dead port must fail fast, not burn every retry.
+// A dead port must fail fast rather than burn every retry.
 func TestWriteErrorNotRetried(t *testing.T) {
 	c := New(errPipe{})
 	if err := c.Erase(); err == nil {
@@ -408,8 +403,7 @@ func (errPipe) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 func (errPipe) Read([]byte) (int, error)  { return 0, io.ErrClosedPipe }
 func (errPipe) Close() error              { return nil }
 
-// hexLine renders a record (count, addr_hi, addr_lo, type, data...) as a hex
-// file line, appending the checksum.
+// hexLine renders a record as a hex file line, appending the checksum.
 func hexLine(rec []byte) string {
 	var sum byte
 	for _, v := range rec {

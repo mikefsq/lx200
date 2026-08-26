@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// PIC32 memory map
+// PIC32 memory map.
 const (
 	kseg0     = 0x80000000
 	bootFlash = 0x9FC00000
@@ -140,8 +140,8 @@ func ParseHex(r io.Reader) (*Image, error) {
 	return &img, nil
 }
 
-// decodeRecord converts one ":..." line to its binary record — the exact bytes
-// PROGRAM_FLASH carries: [count][addr_hi][addr_lo][type][data...][checksum].
+// decodeRecord converts one ":..." line to its binary record, the exact bytes PROGRAM_FLASH
+// carries: count, address, type, data and checksum.
 func decodeRecord(text string) ([]byte, error) {
 	if !strings.HasPrefix(text, ":") {
 		return nil, fmt.Errorf("missing ':' start code")

@@ -8,7 +8,7 @@ const (
 	dle = 0x10
 )
 
-// receive buffer maxFrame
+// maxFrame bounds the receive buffer.
 const maxFrame = 0xFD
 
 // crcTable is the nibble-wise CRC-16-CCITT table (polynomial 0x1021).
@@ -22,7 +22,7 @@ var crcTable = [16]uint16{
 // computed over the unescaped payload and appended little-endian.
 func CRC16(data []byte) uint16 { return crc16From(0, data) }
 
-// crc16From continues a CRC over another slice
+// crc16From continues a CRC over another slice.
 func crc16From(crc uint16, data []byte) uint16 {
 	for _, b := range data {
 		crc = crc<<4 ^ crcTable[(crc>>12^uint16(b)>>4)&0x0f]
@@ -49,9 +49,8 @@ func encodeFrame(payload []byte) []byte {
 	return append(out, eot)
 }
 
-// decoder reassembles frames from the byte stream. It is the mirror of
-// encodeFrame: a byte-at-a-time state machine that unescapes, then validates the
-// trailing CRC when EOT closes the frame.
+// decoder reassembles frames from the byte stream, mirroring encodeFrame: a byte-at-a-time
+// state machine that unescapes, then validates the trailing CRC when EOT closes the frame.
 type decoder struct {
 	buf   []byte
 	inDLE bool
@@ -62,8 +61,8 @@ func (d *decoder) reset() {
 	d.inDLE = false
 }
 
-// feed pushes one received byte and returns a validated payload if it succeeds.
-// a frame that fails its CRC is dropped silently, so the sender retries on timeout.
+// feed pushes one received byte and returns a validated payload if the frame completes. A frame
+// failing its CRC is dropped silently, so the sender retries on timeout.
 func (d *decoder) feed(b byte) ([]byte, bool) {
 	if len(d.buf) >= maxFrame {
 		d.reset()

@@ -66,6 +66,33 @@ m, err := am5.Open("/dev/tty.usbserial-XXXX") // USB-serial …
 `rst.Open` / `rst.Find` (auto-detect by USB id) and `onstep.Open` / `onstep.Dial`
 follow the same pattern.
 
+### RST slew rates
+
+`:RG#`/`:RC#`/`:RM#`/`:RS#` select one of four stored speed slots rather than carrying a rate,
+so a bare preset runs at whatever that slot holds. `rst.SetAxisRate` and `rst.MoveAxisRate`
+write the slot before selecting it, mirroring the vendor driver; `rst.AxisRates()` lists the
+four the vendor advertises, up to 8.33 °/s.
+
+### The RST protocol
+
+`rst/` implements known commands, but the useful number is the second one below:
+
+```
+cmd/rstverify                          # read sweep against a real mount
+cmd/rstverify -write                   # plus round-trip write checks
+cmd/rstmotion -yes                     # homing and parking — MOVES THE TELESCOPE
+```
+
+The dialect fails silently in three different ways — a blind setter answers nothing, an
+acknowledging setter answers `1` whether or not the argument parsed, and two getters are
+firmware stubs that return literals. Unit tests can only show the driver builds the frame
+PROTOCOL.md describes; `rstverify` is what shows the mount agrees. It does not touch the SPI
+memory, factory-calibration or diagnostic families, and it does not move the telescope.
+
+`rstmotion` covers what it cannot: homing and parking. Run it with the mount in view. Between
+them they found six faults the unit tests could not — including `:AH#`, which is a homing
+busy guard rather than the at-home flag its name suggests.
+
 ### Flashing RST firmware
 
 `rst/boot` and `cmd/rstflash` replace the vendor's Windows-only

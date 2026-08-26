@@ -98,6 +98,14 @@ func (c *Conn) OpLock() func() {
 // ErrTimeout is returned when a reply does not arrive within the command timeout.
 var ErrTimeout = errors.New("lx200: timed out waiting for reply")
 
+// ErrNoMatch is returned by GetMatching when it exhausts its skip budget without a reply the
+// caller accepts. It means the stream held more unexpected frames — stray completion tokens,
+// or another front-end's interleaved reply — than the skip budget allowed, NOT that the reply
+// was wrong. A caller that sees it should drain and retry rather than trust any value: the
+// alternative, returning the last unmatched frame, is a value the caller cannot distinguish
+// from a real one and will mis-parse.
+var ErrNoMatch = errors.New("lx200: no matching reply within the skip budget")
+
 // Blind sends a command that produces no reply (halt, slewing-rate, move).
 func (c *Conn) Blind(cmd string) error {
 	c.mu.Lock()
@@ -184,13 +192,51 @@ func (c *Conn) GetMatching(cmd string, accept func(string) bool, skip func(strin
 		if err != nil {
 			return "", err
 		}
-		if accept(s) || i >= maxSkip {
+		if accept(s) {
 			return s, nil
+		}
+		if i >= maxSkip {
+			return "", fmt.Errorf("%s: last frame %q: %w", cmd, s, ErrNoMatch)
 		}
 		if skip != nil {
 			skip(s)
 		}
 	}
+}
+
+// SlewNack issues a slew-initiating command on a mount that answers only when it REFUSES, and
+// returns that refusal ("" when the mount stayed silent, i.e. accepted).
+//
+// Some mounts do not acknowledge a slew at all: a Rainbow RST answers ":MS#" with nothing when it
+// starts moving, and echoes the command with a fault suffix ("MSZZ#") when it will not. Slew is
+// the wrong shape for that — it blocks for the whole command timeout waiting for a byte that an
+// accepted slew never sends, turning every successful goto into a timeout.
+//
+// The write and the bounded listen happen under one hold of the command mutex. That matters more
+// than it looks: without it a background poll can slip between them and have ITS reply read as the
+// slew's answer, which is how a completion token from an earlier move gets reported as this
+// command's fault.
+//
+// window bounds the wait for a refusal; a non-positive window means the command timeout. An
+// unsolicited token can still land inside the window, so the caller must be prepared for a
+// returned string that is a token rather than a fault, and route it.
+func (c *Conn) SlewNack(cmd string, window time.Duration) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.write(cmd); err != nil {
+		return "", err
+	}
+	if window <= 0 {
+		window = c.timeout
+	}
+	s, err := c.readUntil('#', window)
+	if errors.Is(err, ErrTimeout) {
+		return "", nil // silence: the mount accepted it
+	}
+	if err != nil {
+		return "", err
+	}
+	return s, nil
 }
 
 // Slew runs a slew-initiating command (classically :MS#). The mount replies '0'
@@ -213,7 +259,10 @@ func (c *Conn) Slew(cmd string) error {
 	if reason == "" {
 		return fmt.Errorf("lx200: slew rejected (code %c)", b)
 	}
-	return fmt.Errorf("lx200: slew rejected: %s", reason)
+	// The status byte is part of the fault, not a separate thing: an RST answers a refused
+	// :MS# with "MSZZ#", so reporting only what follows the first byte would log "SZZ" and
+	// leave the reader hunting for a code that never appears on the wire.
+	return fmt.Errorf("lx200: slew rejected: %c%s", b, reason)
 }
 
 // --- framing internals (caller holds mu) ---

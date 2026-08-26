@@ -51,8 +51,8 @@ type Info struct {
 
 func (i Info) String() string { return fmt.Sprintf("v%d.%d", i.Major, i.Minor) }
 
-// IsHuboI reports whether the version matches the HUBO-I/ASTRO V001 controller
-// the vendor downloader recognises. Other versions are not refused.
+// IsHuboI reports whether the version matches the controller the vendor downloader recognises.
+// Other versions are not refused.
 func (i Info) IsHuboI() bool { return i.Major == 1 && i.Minor == 0 }
 
 // Client is a connection to a mount sitting in its bootloader.
@@ -96,8 +96,7 @@ func (c *Client) Connect(timeout time.Duration) (Info, error) {
 	return Info{Major: reply[0], Minor: reply[1]}, nil
 }
 
-// Erase wipes the application flash.
-// for the mount to boot again.
+// Erase wipes the application flash. The mount will not boot again until Program has run.
 func (c *Client) Erase() error {
 	_, err := c.do(EraseFlash, nil, commandRetries, eraseTimeout)
 	return err
@@ -125,7 +124,7 @@ func (c *Client) Program(img *Image, progress func(done, total int)) error {
 	return nil
 }
 
-// ReadCRC returns the checksum of a range of flash
+// ReadCRC returns the device's checksum of a range of flash.
 func (c *Client) ReadCRC(start, length uint32, expected uint16) (uint16, error) {
 	args := []byte{
 		byte(start), byte(start >> 8), byte(start >> 16), byte(start >> 24),
@@ -142,9 +141,9 @@ func (c *Client) ReadCRC(start, length uint32, expected uint16) (uint16, error) 
 	return uint16(reply[0]) | uint16(reply[1])<<8, nil
 }
 
-// ErasedCRC returns the checksum for a run of erased flash (all 0xFF)
-// of the given length. Comparing a ReadCRC result against it tells
-// you a region is unprogrammed without needing any firmware image
+// ErasedCRC returns the checksum for a run of erased flash of the given length. Comparing a
+// ReadCRC result against it identifies an unprogrammed region without needing a firmware
+// image.
 func ErasedCRC(length uint32) uint16 {
 	const chunk = 8192
 	buf := make([]byte, chunk)
@@ -163,7 +162,7 @@ func ErasedCRC(length uint32) uint16 {
 	return crc
 }
 
-// AppBase is a candidate application base address
+// AppBase is a candidate application base address.
 const (
 	AppBase135 = 0x9D000000
 	AppBase150 = 0x9D006100
@@ -246,8 +245,8 @@ func (c *Client) await(cmd Command, timeout time.Duration) ([]byte, error) {
 			return nil, fmt.Errorf("rst/boot: read: %w", err)
 		}
 		if n == 0 {
-			// A serial port blocks for its read timeout, but transports that
-			// return immediately when idle would spin here.
+			// A serial port blocks for its read timeout, but a transport that returns
+			// immediately when idle would spin here.
 			time.Sleep(2 * time.Millisecond)
 			continue
 		}
