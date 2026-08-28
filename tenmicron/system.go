@@ -183,6 +183,7 @@ type MountClass struct {
 	Product string // raw :GVP# product name, e.g. "10micron GM1000HPS"
 	AltAz   bool   // an AZ-series (altazimuth) mount rather than a GM (German equatorial)
 	GM4000  bool   // the GM4000/AZ4000 class, which uses a 0.75 RA slew-rate ratio
+	DDS     bool   // a direct-drive mount (AZ2500DDS/AZ5000DDS/AZ6000DDS): alarms, DDS Gstat codes
 }
 
 // parseMountClass classifies a :GVP# product name (e.g. "10micron GM4000HPS").
@@ -193,6 +194,7 @@ func parseMountClass(product string) MountClass {
 		Product: p,
 		AltAz:   strings.Contains(up, "AZ"),
 		GM4000:  strings.Contains(up, "4000"),
+		DDS:     strings.Contains(up, "DDS"),
 	}
 }
 

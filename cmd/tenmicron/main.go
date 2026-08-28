@@ -174,6 +174,19 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 		report(m.ControlBoxVersion())
 	case "mountcfg":
 		mountCfg(m)
+	case "alarms":
+		alarms(m)
+	case "alarmack":
+		if len(args) != 1 {
+			fmt.Println("usage: alarmack <alarm-id>   (e.g. 1001)")
+			return
+		}
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			fmt.Printf("err: bad alarm id %q\n", args[0])
+			return
+		}
+		reportErr(m.AcknowledgeAlarm(tenmicron.Alarm(n)))
 
 	// --- grouped read dumps -------------------------------------------------
 	case "clock", "site":
@@ -804,13 +817,37 @@ func ginfo(m *tenmicron.Mount) {
 
 func mountCfg(m *tenmicron.Mount) {
 	c := m.MountClass()
-	fmt.Printf("  class: product=%q altaz=%v gm4000=%v raSlewRatio=%.2f\n",
-		c.Product, c.AltAz, c.GM4000, m.RASlewRatio())
+	fmt.Printf("  class: product=%q altaz=%v gm4000=%v dds=%v raSlewRatio=%.2f\n",
+		c.Product, c.AltAz, c.GM4000, c.DDS, m.RASlewRatio())
 	if cfg, err := m.MountConfiguration(); err != nil {
 		fmt.Printf("  :GCFG# err: %v\n", err)
 	} else {
 		fmt.Printf("  live:  altaz=%v fork=%v southern=%v homed=%v\n",
 			cfg.AltAz, cfg.Fork, cfg.Southern, cfg.Homed)
+	}
+}
+
+// alarms reports the DDS alarm lists (:alarmlistact# / :alarmlistunack#, firmware
+// ≥ 3.4). Non-DDS mounts do not answer these, so the reads time out there.
+func alarms(m *tenmicron.Mount) {
+	for _, l := range []struct {
+		title string
+		fn    func() ([]tenmicron.Alarm, error)
+	}{
+		{"active", m.ActiveAlarms},
+		{"unacknowledged", m.UnacknowledgedAlarms},
+	} {
+		list, err := l.fn()
+		switch {
+		case err != nil:
+			fmt.Printf("  %-16s err: %v\n", l.title, err)
+		case len(list) == 0:
+			fmt.Printf("  %-16s none\n", l.title)
+		default:
+			for _, a := range list {
+				fmt.Printf("  %-16s %d (%s)\n", l.title, int(a), a)
+			}
+		}
 	}
 }
 
@@ -1419,6 +1456,15 @@ func dump(m *tenmicron.Mount) {
 			}},
 		}},
 	}
+	if m.MountClass().DDS { // DDS-only; a GM/AZ mount just times out on these
+		groups = append(groups, struct {
+			title  string
+			probes []probe
+		}{"alarms", []probe{
+			{"activeAlarms", fAlarms(m.ActiveAlarms)},
+			{"unackedAlarms", fAlarms(m.UnacknowledgedAlarms)},
+		}})
+	}
 	for _, g := range groups {
 		fmt.Printf("── %s ──\n", g.title)
 		runProbes(g.probes)
@@ -1462,6 +1508,19 @@ func fT(fn func() (time.Time, error)) func() (string, error) {
 }
 func fS(fn func() (string, error)) func() (string, error) {
 	return func() (string, error) { v, err := fn(); return fmt.Sprintf("%q", v), err }
+}
+func fAlarms(fn func() ([]tenmicron.Alarm, error)) func() (string, error) {
+	return func() (string, error) {
+		list, err := fn()
+		if len(list) == 0 {
+			return "none", err
+		}
+		parts := make([]string, len(list))
+		for i, a := range list {
+			parts[i] = fmt.Sprintf("%d (%s)", int(a), a)
+		}
+		return strings.Join(parts, ", "), err
+	}
 }
 func fWeather(fn func() (float64, time.Duration, error)) func() (string, error) {
 	return func() (string, error) {
@@ -1563,6 +1622,7 @@ reads — position / status:
 
 reads — grouped:
   clock  limits  rates  refraction  target  network  dome  model  mountcfg
+  alarms               DDS alarm lists (fw ≥ 3.4); alarmack <id> to acknowledge
   version fwdate fwtime product hwid controlbox  guiderate  temp <sensor#>
 
 target setters (round-trip the coordinate encoders):

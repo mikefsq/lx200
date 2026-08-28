@@ -62,8 +62,11 @@ func TestGstatMapping(t *testing.T) {
 		{GstatStopped, false, false, false},
 		{GstatOutOfLimits, true, false, false}, // 9: spec "tracking is on but outside limits"
 		{GstatFollowingSat, true, false, false},
-		{GstatUnknown, false, false, false}, // 98 -> idle (matches INDI)
-		{GstatError, false, false, false},   // 99 -> idle
+		{GstatDDSNoPower, false, false, false}, // 12: DDS controller waiting for power
+		{GstatDDSMonitor, false, false, false}, // 13: DDS monitor mode
+		{GstatDDSAutotune, false, true, false}, // 14: DDS autotune drives the axes
+		{GstatUnknown, false, false, false},    // 98 -> idle (matches INDI)
+		{GstatError, false, false, false},      // 99 -> idle
 	}
 	for _, c := range cases {
 		s := Status{Gstat: c.g}

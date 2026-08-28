@@ -548,15 +548,18 @@ func TestNetworkDiscovery(t *testing.T) {
 
 func TestMountClass(t *testing.T) {
 	cases := []struct {
-		product       string
-		altaz, gm4000 bool
+		product            string
+		altaz, gm4000, dds bool
 	}{
-		{"10micron GM1000HPS", false, false},
-		{"10micron GM4000QCI 48V", false, true},
-		{"10micron AZ2000", true, false},
+		{"10micron GM1000HPS", false, false, false},
+		{"10micron GM4000QCI 48V", false, true, false},
+		{"10micron AZ2000", true, false, false},
+		{"10micron AZ5000DDS", true, false, true},
+		{"10micron AZ2500DDS", true, false, true},
 	}
 	for _, c := range cases {
-		if mc := parseMountClass(c.product); mc.AltAz != c.altaz || mc.GM4000 != c.gm4000 {
+		mc := parseMountClass(c.product)
+		if mc.AltAz != c.altaz || mc.GM4000 != c.gm4000 || mc.DDS != c.dds {
 			t.Errorf("parseMountClass(%q) = %+v", c.product, mc)
 		}
 	}

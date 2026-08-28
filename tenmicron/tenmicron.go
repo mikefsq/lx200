@@ -126,6 +126,9 @@ const (
 	GstatOutOfLimits  = 9
 	GstatFollowingSat = 10
 	GstatNeedsUserOK  = 11
+	GstatDDSNoPower   = 12 // DDS mounts: the controller is waiting for power to be enabled
+	GstatDDSMonitor   = 13 // DDS mounts: the controller is in monitor mode
+	GstatDDSAutotune  = 14 // DDS mounts: the controller is in autotune mode
 	GstatUnknown      = 98 // status not (yet) known
 	GstatError        = 99 // mount error
 )
@@ -145,9 +148,11 @@ func (s Status) IsTracking() bool {
 // IsSlewing reports whether the mount is moving toward a target/position: an explicit
 // slew (the :Ginfo# slew flag or GstatSlewing), slewing to park (GstatParking) or home
 // (GstatSlewingHome), or unparking (GstatUnparking — moving from park back to operation).
+// GstatDDSAutotune counts too: a direct-drive controller drives the axes while tuning
+// them, so the mount is not safe to treat as settled.
 func (s Status) IsSlewing() bool {
 	switch s.Gstat {
-	case GstatParking, GstatUnparking, GstatSlewingHome, GstatSlewing:
+	case GstatParking, GstatUnparking, GstatSlewingHome, GstatSlewing, GstatDDSAutotune:
 		return true
 	}
 	return s.Slew
