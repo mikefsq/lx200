@@ -1,125 +1,120 @@
 # lx200
 
-A transport-agnostic Go library for the Meade **LX200** command protocol family 
-implementing the `:CMD#`-framed serial/TCP dialect spoken (with vendor extensions)
-by 10Micron, ZWO AM-series, Rainbow Astro RST, OnStep, and many other telescope mounts.
+Go library for telescope mounts using the Meade LX200 command family.
+It provides serial and TCP connections, mount-specific commands, and an
+[LX200 TCP bridge](bridge/README.md) for clients such as Stellarium and SkySafari.
 
-It is **dependency-light and ASCOM/Alpaca-agnostic**: import it to drive a mount
-in-process. The Alpaca Telescope wrapper lives in a separate module.
+Requires Go 1.25 or later. Linux, macOS, and Windows builds do not require cgo.
 
-## Layout
-
-```
-lx200/
-├── lx200.go          Conn + the four framing primitives
-├── commands.go       shared LX200 command set (coords, target, slew, sync, …)
-├── sexagesimal.go    HH:MM:SS / sDD*MM:SS parsing & formatting
-├── mount.go          Mount interface + optional capability interfaces
-├── serial/           serial transport (isolates the go.bug.st/serial dependency)
-├── tenmicron/        10Micron GM-series      (TCP)
-├── am5/              ZWO AM3/AM5/AM5N/AM7     (USB-serial or WiFi/TCP)
-├── rst/              Rainbow Astro RST-135/300 (USB-serial)
-│   └── boot/         RST firmware flashing over its Microchip AN1388 bootloader
-├── onstep/           OnStep / OnStepX        (USB-serial or WiFi/TCP)
-└── bridge/           LX200 TCP *server* — the protocol inverse: serves a Mount
-                      to Stellarium / SkySafari (see bridge/README.md)
-```
-
-The per-mount packages are LX200 **clients** (they speak `:CMD#` *to* a mount),
-each embedding the core `*lx200.Conn` and adding only its vendor-specific status,
-tracking, park, and site commands. `bridge/` is the **server** direction: it
-*answers* `:CMD#` for an atlas, fronting any `lx200.Mount`.
-
-## Design
-
-- **Framing.** Every LX200 command is serialized and bounded by a read deadline. 
-  The reply is one of four kinds: `Blind` (no reply — `:Q#`, `:Mn#`),
-  `Ack` (one byte `0`/`1`, `:Sr`/`:Sd`/`:St…` set commands),
-  `Get` (read until `#` — the `:Gx#` queries),
-  and `Slew` (`:MS#` → `0` started, else a `#`-terminated fault). 
-- **Capabilities.** Not all mounts implement park/unpark, find-home, side-of-pier,
-  alt/az, pulse-guide, per-axis move, track-rate select, site geometry, UTC clock so 
-  a driver advertises the hardware capabilities.
-- **Transports.** TCP (`DialTCP`, e.g. 10Micron) and serial (`serial.Open`, for
-  USB/RS-232).
-
-## Usage
-
-```go
-import "github.com/mikefsq/lx200/tenmicron"
-
-m, err := tenmicron.Connect("10.0.1.51:3492") // 10Micron over TCP
-if err != nil { /* ... */ }
-ra, _ := m.RA()
-m.SetTargetRA(12.5)
-m.SetTargetDec(45.0)
-m.SlewToTarget()
-```
-
-```go
-import "github.com/mikefsq/lx200/am5"
-
-m, err := am5.Open("/dev/tty.usbserial-XXXX") // USB-serial …
-// m, err := am5.Dial("192.168.4.1:4030")     // … or WiFi/TCP
-```
-
-`rst.Open` / `rst.Find` (auto-detect by USB id) and `onstep.Open` / `onstep.Dial`
-follow the same pattern.
-
-### RST slew rates
-
-`:RG#`/`:RC#`/`:RM#`/`:RS#` select one of four stored speed slots rather than carrying a rate,
-so a bare preset runs at whatever that slot holds. `rst.SetAxisRate` and `rst.MoveAxisRate`
-write the slot before selecting it, mirroring the vendor driver; `rst.AxisRates()` lists the
-four the vendor advertises, up to 8.33 °/s.
-
-### The RST protocol
-
-`rst/` implements known commands, but the useful number is the second one below:
-
-```
-cmd/rstverify                          # read sweep against a real mount
-cmd/rstverify -write                   # plus round-trip write checks
-cmd/rstmotion -yes                     # homing and parking — MOVES THE TELESCOPE
-```
-
-The dialect fails silently in three different ways — a blind setter answers nothing, an
-acknowledging setter answers `1` whether or not the argument parsed, and two getters are
-firmware stubs that return literals. Unit tests can only show the driver builds the frame
-PROTOCOL.md describes; `rstverify` is what shows the mount agrees. It does not touch the SPI
-memory, factory-calibration or diagnostic families, and it does not move the telescope.
-
-`rstmotion` covers what it cannot: homing and parking. Run it with the mount in view. Between
-them they found six faults the unit tests could not — including `:AH#`, which is a homing
-busy guard rather than the at-home flag its name suggests.
-
-### Flashing RST firmware
-
-`rst/boot` and `cmd/rstflash` replace the vendor's Windows-only
-`HUBOi_Firmware_Downloader.exe` — which is Microchip's stock PIC32UBL (AN1388)
-host, rebranded. The controller enters its bootloader only when powered on with
-**PREV and NEXT held**; nothing in software puts it there.
-
-```
-rstflash -check RST-135E_260319.hex   # parse and summarise the file; opens no port
-rstflash -info                        # report the bootloader version
-rstflash RST-135E_260319.hex          # erase, program, verify (prompts first)
-```
-
-Flashing erases the application firmware before writing. An interrupted flash
-leaves the mount unbootable until a flash completes; retry with PREV+NEXT held.
-The protocol is reverse-engineered from the vendor tool and unit-tested against a
-loopback bootloader, but has **not** been run against a mount.
-
-## Status
-
-| Mount | Transport | Validation |
+| Package | Mounts | Connection |
 |---|---|---|
-| 10Micron | TCP | against hardware |
-| Rainbow RST | serial | against hardware |
-| ZWO AM5 | serial / TCP | from the INDI driver + vendor protocol; wip |
-| OnStep | serial / TCP | from the INDI driver + vendor protocol; wip |
+| `tenmicron` | 10Micron GM-series | TCP |
+| `rst` | Rainbow Astro RST | USB-serial |
+| `am5` | ZWO AM3, AM5, AM5N, AM7 | USB-serial or TCP |
+| `onstep` | OnStep and OnStepX | Serial or TCP |
+
+10Micron and RST have been exercised against hardware. AM-series and OnStep
+support is based on vendor protocols and INDI implementations and needs hardware
+validation. Alpaca wrappers are maintained separately in
+[goalpaca-devices](https://github.com/mikefsq/goalpaca-devices).
+
+## Use the library
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/mikefsq/lx200/tenmicron"
+)
+
+func run() error {
+    mount, err := tenmicron.Connect("10.0.1.51:3492")
+    if err != nil {
+        return err
+    }
+    defer mount.Close()
+
+    ra, err := mount.RA()
+    if err != nil {
+        return err
+    }
+    dec, err := mount.Dec()
+    if err != nil {
+        return err
+    }
+    fmt.Printf("RA %.6f hours, Dec %.6f degrees\n", ra, dec)
+    return nil
+}
+
+func main() {
+    if err := run(); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+Use `rst.Open(port)`, `am5.Open(port)`, or `onstep.Open(port)` for serial
+connections. AM-series and OnStep also provide `Dial("host:port")`.
+`rst.Find()` probes candidate serial ports; `rst.FindMatching` can restrict
+that scan by USB serial number. On macOS, serial enumeration provides device
+names but no USB identifiers, so use an explicit port when selecting a device.
+
+Commands are serialized individually. When sharing a mount between callers,
+hold `OpLock` across target-setting and slew/sync sequences. Check setter
+acknowledgements and errors before starting motion.
+
+RST slews require a completed home seek. Poll `Slewing` for completion and
+check `Fault` afterward. Homing uses a fixed speed and blocks interfering
+motion commands. `SetAxisRate` writes a speed slot before selecting it;
+`SetRate` alone selects whatever speed is already stored.
+
+## Command-line tools
+
+```sh
+go build -o tenmicron ./cmd/tenmicron
+go build -o rst ./cmd/rst
+./tenmicron -addr 10.0.1.51:3492 ra
+./rst -serial /dev/ttyUSB0 ra
+```
+
+Omit the command to open an interactive console, then enter `help` to list
+commands. The `tenmicron` console also provides `dump` for a read-only query
+sweep. Both consoles expose motion, configuration, and raw protocol commands.
+
+## RST firmware
+
+Build the firmware tool with `go build -o rstflash ./cmd/rstflash`.
+Power on the controller while holding **PREV and NEXT** to enter the bootloader.
+
+```sh
+./rstflash -check firmware.hex
+./rstflash -serial /dev/ttyUSB0 -info
+./rstflash -serial /dev/ttyUSB0 firmware.hex
+```
+
+`-check` only parses the file. Flashing prompts before erasing, programming,
+and verifying the application firmware. Use firmware for the exact mount model.
+An interrupted flash requires another completed flash before normal startup;
+re-enter the bootloader with PREV and NEXT to retry.
+
+The bootloader implementation has loopback tests; hardware flashing has not
+been validated. Use `-help` for CRC and firmware-identification options.
+
+## Development
+
+```sh
+go test -race ./...
+go vet ./...
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
+```
+
+Tests use scripted transports. The RST hardware test is opt-in through `RST_HW`;
+set `RST_PORT` to select its serial port and close other applications using it.
+See [DRIVERS.md](DRIVERS.md) for adding a mount dialect or transport.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE).

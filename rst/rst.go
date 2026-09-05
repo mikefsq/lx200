@@ -1,17 +1,4 @@
-// Package rst drives Rainbow Astro RST harmonic mounts over their LX200-derived serial
-// dialect, on the shared lx200 core.
-//
-// The dialect differs from LX200 in two ways this package handles throughout: there is no
-// status query, so the mount pushes an unsolicited completion token (:MM0#, :CHO#) when a slew
-// or home finishes, and replies echo the command prefix (:GR# answers :GR20:28:56.9#).
-//
-// Three kinds of silent failure shape the API. A blind setter answers nothing, so success and
-// "ignored" look alike. An acknowledging setter answers '1' whether or not the argument parsed.
-// Two getters are firmware stubs returning literals. A readback is therefore necessary but not
-// sufficient: it has to read a register the setter really writes.
-//
-// PROTOCOL.md is the full command reference and records how each command was recovered.
-// cmd/rstverify exercises this package against a real mount.
+// Package rst drives Rainbow Astro RST mounts over USB-serial.
 package rst
 
 import (
@@ -50,7 +37,7 @@ const (
 	peekTTL     = 100 * time.Millisecond
 )
 
-// Mount is a Rainbow Astro RST mount on a golx200 LX200 connection.
+// Mount is a Rainbow Astro RST mount on a LX200 connection.
 type Mount struct {
 	*lx200.Conn
 
@@ -124,9 +111,7 @@ func (m *Mount) init() {
 // buffer. Separate from init because a probe needs it before it can expect a well-formed
 // reply.
 func (m *Mount) selectDialect() {
-	// Ask before writing. :AU# and :AR# each write the configuration EEPROM unconditionally,
-	// and this driver reconnects on a 3s retry loop, so sending them every time would cycle a
-	// flash cell thousands of times a day on a mount that is merely flapping.
+	// Avoid redundant :AU#/:AR# commands: each writes the configuration EEPROM.
 	if m.inRainbowMode() {
 		m.drainStale()
 		return
@@ -143,12 +128,7 @@ func (m *Mount) inRainbowMode() bool {
 	return err == nil && strings.HasPrefix(s, ":GR")
 }
 
-// The mechanical signature of the polar-axis park, from :CY#: the Dec axis folded up to about
-// 90, with the tube along the RA axis, and the RA axis at 0, with the tube on top.
-//
-// The RA axis is what carries the information. Every stow at the pole has the Dec axis near 90,
-// so the Dec bound alone cannot tell the intended park from one where the tube ended up out to
-// the side. PROTOCOL.md records the measured values these bounds come from.
+// Park requires Dec near 90 degrees and RA near zero in the :CY# axis readings.
 const (
 	parkDecAxisMin = 89.9
 	parkDecAxisMax = 90.0
@@ -256,14 +236,8 @@ func Find() (*Mount, error) {
 	return m, err
 }
 
-// Filter narrows which ports Find considers.
-//
-// Pinning Serial is the only way to keep the scan off a neighbour's port. There is deliberately
-// no exclusion list: one existed, built from ports that were probed and stayed silent, and it
-// blacklisted the mount itself. A mount is silent for the first few seconds after a power cycle,
-// while its USB bridge has already re-enumerated, so an ordinary power cycle was enough to
-// record it as "not an RST" — permanently, since the list was persisted. Silence does not
-// distinguish a neighbour from a mount that is not talking yet.
+// Filter restricts discovery to a USB serial number when specified.
+// Silent ports are not excluded from later scans: a mount may still be starting.
 type Filter struct {
 	Serial string // bind only this USB bridge serial; empty = any candidate
 }
@@ -358,8 +332,6 @@ func candidates(ports []serial.PortInfo, f Filter) []serial.PortInfo {
 
 // Version returns the firmware version (:AV#).
 func (m *Mount) Version() (string, error) { return m.get(":AV#", ":AV") }
-
-// --- Unsolicited completion-token handling (the RST-specific core) -----------
 
 // drainToken peeks for a pushed completion token, but only while a move is in flight and at
 // most once per peekTTL. It runs before a coordinate read so the token is not mistaken for the
@@ -476,8 +448,6 @@ func (m *Mount) Fault() string {
 	return m.lastFault
 }
 
-// --- Coordinate reads: strip the echoed prefix so the sign leads ------------
-
 // get sends a query and strips the echoed command prefix from the reply
 // (:GR20:28:56.9# -> "20:28:56.9").
 func (m *Mount) get(cmd, prefix string) (string, error) {
@@ -521,8 +491,6 @@ func (m *Mount) Altitude() (float64, error) { return m.coord(":GA#", ":GA") }
 // Azimuth reads the current azimuth in degrees, East of North (:GZ#).
 func (m *Mount) Azimuth() (float64, error) { return m.coord(":GZ#", ":GZ") }
 
-// --- Target + goto/sync (RST dialect) ---------------------------------------
-
 // SetTargetRA sets the goto and sync target right ascension in hours (:Sr#), remembering it
 // for the degrees-based :Ck sync. Reports whether the mount accepted it.
 func (m *Mount) SetTargetRA(hours float64) (bool, error) {
@@ -555,11 +523,7 @@ func (m *Mount) SlewToTarget() error {
 	return nil
 }
 
-// slewCmd issues a slew-initiating command and reports a refusal.
-//
-// The mount answers a slew only to refuse it, echoing the command with a fault suffix, so
-// silence means it started. Firing the command blind would report every refusal as success and
-// latch slewing with nothing able to clear it, since the completion token is never coming.
+// slewCmd sends a slew command and checks for a refusal before latching motion.
 func (m *Mount) slewCmd(cmd, verb string) error {
 	reply, err := m.SlewNack(cmd, slewFaultWindow)
 	if err != nil {
@@ -695,8 +659,6 @@ func (m *Mount) Halt() error {
 	return nil
 }
 
-// --- Status (no status command: tracking via :AT#, slewing via the token) ----
-
 // Slewing reports whether the mount is moving under a goto, a home seek, a park or a
 // continuous MoveAxis.
 //
@@ -787,21 +749,12 @@ func (m *Mount) TrackMode() (TrackMode, error) {
 	}
 }
 
-// --- Homer (:Ch#, completion via :CHO#) --------------------------------------
-
 // ErrHoming is returned by an operation refused because a home seek is already running.
 var ErrHoming = errors.New("rainbow: a home seek is already running")
 
-// FindHome seeks the mount's mechanical home (:Ch#), stopping tracking first. Completion
-// arrives asynchronously as a :CHO# token, which latches HomeFound.
-//
-// The seek runs at a fixed rate the slew presets do not affect, and the mount reports its
-// starting position for almost the whole run. Poll Slewing, not the coordinates.
-//
-// Refused when :AH# says a seek is already running, because :Ch# is blind and the firmware
-// discards a re-entrant one in silence: the handler tests that flag first and returns without
-// answering. Sent regardless, the driver would latch Slewing waiting for a token the mount is
-// never going to send. Observed on hardware.
+// FindHome starts a mechanical home seek after stopping tracking.
+// Poll Slewing for completion; coordinates stay near the starting position
+// during the seek. A :CHO# token latches HomeFound. Re-entry is refused.
 func (m *Mount) FindHome() error {
 	// Read before writing. A stuck busy flag is the case this catches, and it is not
 	// recoverable over the wire, so saying so plainly beats a three-minute silent wait.
@@ -823,16 +776,8 @@ func (m *Mount) FindHome() error {
 	return nil
 }
 
-// refuseWhileHoming reports an error when the mount is mid-home-seek.
-//
-// The seek is a single synchronous call inside the firmware's :Ch# handler, and the busy flag
-// that guards re-entry is cleared only when that call returns. Commands delivered into it write
-// the globals it is looping on — :Q# sets the seek's own abort flag, a goto moves the axes it is
-// driving — and on the development mount a goto plus three halts arriving mid-seek left the flag
-// set permanently, with :Ch# a silent no-op afterwards and only a power cycle to clear it.
-//
-// A read failure is not treated as busy: refusing a halt because a status read failed would be
-// worse than the collision it guards against.
+// refuseWhileHoming rejects commands that could interrupt a home seek and leave
+// the firmware busy until power-cycled. A failed status read does not block a halt.
 func (m *Mount) refuseWhileHoming(op string) error {
 	busy, err := m.Homing()
 	if err != nil || !busy {
@@ -858,11 +803,7 @@ func (m *Mount) AtHome() (bool, error) {
 }
 
 // Homing reports whether a home seek is running (:AH#).
-//
-// :AH# looks like an at-home flag and is not one. The firmware's :Ch# handler tests it to
-// refuse a re-entrant home, sets it, runs the seek and clears it, so it reads 0 immediately
-// after a home succeeds. Use AtHome for position and HomeFound for whether the mount has homed
-// at all.
+// Use AtHome for position and HomeFound for a completed home seek.
 func (m *Mount) Homing() (bool, error) {
 	s, err := m.get(":AH#", ":AH")
 	if err != nil {
@@ -871,33 +812,19 @@ func (m *Mount) Homing() (bool, error) {
 	return strings.HasPrefix(s, "1"), nil
 }
 
-// --- Parker: the RST "park" is the polar-axis stow (OTA along the RA axis) ----
-
 // parkHourAngle is the hour angle Park drives to. +6h puts the RA axis at mechanical zero,
 // which is where the handset's polar-axis parking preset lands, tube on top.
 const parkHourAngle = 6.0
 
 // parkDec is the declination Park targets, one arcminute short of the pole. Not 90: at exactly
 // Dec 90 the RA coordinate is degenerate and the goto has nothing to pin the RA axis to. One
-// arcminute is the smallest margin that survives the mount's own rounding; see PROTOCOL.md.
+// arcminute is the smallest margin that survives the mount's own rounding.
 const parkDec = 89 + 59.0/60.0
 
-// Park stows the mount along its polar axis and leaves it stationary.
-//
-// It is an equatorial goto to an hour angle, not an alt/az goto to the pole. Both point at the
-// same place on the sky, but the pole is an RA singularity, so only commanding the hour angle
-// pins the RA axis and puts the tube on top rather than out to one side. Verify with
-// AxisAngles.
-//
-// Tracking is stopped twice, before the slew and again once it arrives, because an equatorial
-// goto turns tracking on. See maybeFinishPark.
-//
-// A mount already on the polar axis is latched without slewing at all. That is not only an
-// optimisation: a goto to where the mount already is produces no completion token on this
-// firmware, so the driver would wait for one that never comes, leave slewing latched, and never
-// run the deferred tracking-off — the mount then sits tracking and drifts off the park.
-// Observed on hardware, and reachable in one click from a Park/Unpark toggle, since Unpark
-// leaves the tube exactly where it was.
+// Park stows the mount along its polar axis and stops tracking on arrival.
+// An hour-angle target pins the RA axis; tracking must be stopped again because
+// an equatorial slew enables it. A mount already parked is stopped without a
+// slew, since a zero-distance move may produce no completion token.
 func (m *Mount) Park() error {
 	if err := m.requireHome("park"); err != nil {
 		return err
@@ -974,14 +901,8 @@ func (m *Mount) AtPark() (bool, error) {
 		axisNear(raAxis, parkRAAxis, parkRAAxisTol), nil
 }
 
-// --- PierSider (RST has no pier flag; derive it like INDI) -------------------
-
-// AxisAngles reads the mechanical axis angles from :CY#, the Dec-axis and RA-axis rotations in
-// degrees. Read-only, and encoder-backed on a 135E.
-//
-// These express the mount's orientation, which RA and Dec cannot at the pole: every RA points
-// at the pole when Dec is 90, so the equatorial coordinates are degenerate there while the axis
-// angles are not. AtHome and AtPark both test them for that reason.
+// AxisAngles returns mechanical Dec-axis and RA-axis angles in degrees (:CY#).
+// These distinguish orientations at the celestial pole, where RA is degenerate.
 func (m *Mount) AxisAngles() (decAxis, raAxis float64, err error) {
 	raw, err := m.get(":CY#", ":CY") // "+089.49/-000.00" -> DEC / RA
 	if err != nil {
@@ -1026,8 +947,6 @@ func (m *Mount) PierSide() (lx200.PierSide, error) {
 	return lx200.PierEast, nil
 }
 
-// --- Guider (no :Mg#; a timed start/stop move instead) ----------------------
-
 // PulseGuide guides for ms milliseconds. The mount has no :Mg#, so this selects the custom
 // track and guide rates, starts a move, and stops it asynchronously. Returns immediately.
 func (m *Mount) PulseGuide(d lx200.Direction, ms int) error {
@@ -1066,8 +985,6 @@ func (m *Mount) StopAxis(a lx200.Axis) error {
 	return m.Blind(":Q#")
 }
 
-// --- SiteSetter (RST uses '*' separators; longitude is East-negative) --------
-
 // SetSiteLatitude sets the observing latitude in degrees (:St#). Blind; read it back with
 // SiteLatitude.
 func (m *Mount) SetSiteLatitude(deg float64) error {
@@ -1086,8 +1003,6 @@ func (m *Mount) SetSiteLongitude(deg float64) error {
 // to satisfy lx200.SiteSetter.
 func (m *Mount) SetSiteElevation(meters float64) error { return nil }
 
-// --- vendor telemetry --------------------------------------------------------
-
 // Voltage returns the input voltage (:Cv#).
 func (m *Mount) Voltage() (float64, error) {
 	s, err := m.get(":Cv#", ":Cv")
@@ -1098,8 +1013,6 @@ func (m *Mount) Voltage() (float64, error) {
 	_, err = fmt.Sscanf(s, "%f", &v)
 	return v, err
 }
-
-// --- Clock / date / site (GPS-fed) ------------------------------------------
 
 // SiderealTime reads local sidereal time in hours (:GS#).
 func (m *Mount) SiderealTime() (float64, error) { return m.coord(":GS#", ":GS") }
@@ -1148,16 +1061,8 @@ func (m *Mount) SetUTCOffset(offset time.Duration) error {
 	return m.Blind(fmt.Sprintf(":SG%c%02d#", sign, int(offset/time.Hour)))
 }
 
-// SetUTC sets the clock from a UTC instant.
-//
-// The mount stores local time, so t is converted using the offset the mount already holds
-// rather than t's own zone: the handset owns the site's civil time. Set the offset deliberately
-// with SetUTCOffset if it is wrong.
-//
-// The date is written only when it differs from the one t implies, because :SC# makes the mount
-// recompute its planetary ephemeris. Leaving a wrong date is worse than the cost of fixing it:
-// the date feeds sidereal time, so an hour angle computed from the wrong day is a pointing
-// error the mount reports no symptom of.
+// SetUTC sets local date/time using the mount's configured UTC offset.
+// The date is written only when it changes to avoid recomputing the ephemeris.
 func (m *Mount) SetUTC(t time.Time) error {
 	off, err := m.UTCOffset()
 	if err != nil {
@@ -1298,8 +1203,6 @@ func (m *Mount) SlewLimits() ([6]float64, error) {
 	return out, nil
 }
 
-// --- Controller telemetry ---------------------------------------------------
-
 // GPSState is the mount's GPS fix, the second flag of :GY#. It is tri-state rather than the
 // O or X of the others. A mount reporting anything but GPSFix is running on its internal clock
 // with nothing disciplining it.
@@ -1363,8 +1266,6 @@ func (m *Mount) AutoResume() (bool, error) {
 	}
 	return strings.HasPrefix(s, "R"), nil
 }
-
-// --- Guide rate / slew speeds / pier-flip config ----------------------------
 
 // GuideRate reads the guide rate as a multiple of sidereal (:CU0#).
 func (m *Mount) GuideRate() (float64, error) {
@@ -1537,15 +1438,8 @@ func (m *Mount) SetForcePierFlip(on bool) error {
 	return m.Blind(":Af0#")
 }
 
-// --- helpers ----------------------------------------------------------------
-
-// hms and dmsParts split a decimal hour or degree into the sexagesimal fields the target and
-// site frames carry.
-//
-// Both round to the wire's precision before splitting, and the order matters. Truncating first
-// loses a whole minute whenever binary floating point puts a value just under an exact
-// boundary, as any "N degrees and M arcminutes" constant does. Rounding into integer
-// tenths first also carries correctly instead of printing a 60.0 field.
+// hms and dmsParts round to wire precision before splitting fields, preserving
+// carries at minute and second boundaries.
 func hms(hours float64) (h, m int, s float64) {
 	t := math.Round(hours*36000) / 10 // seconds, to 0.1
 	if t >= 86400 {                   // 23:59:59.97 rounds up to a full day; wrap to 00:00:00.0

@@ -103,8 +103,6 @@ func TestDecoderSkipsNoise(t *testing.T) {
 	}
 }
 
-// --- hex parsing ------------------------------------------------------------
-
 // A minimal but realistic image: an extended-linear record selecting 0x9D00,
 // two data records, and EOF. CRLF line endings, as the vendor files use.
 const sampleHex = ":020000041D00DD\r\n" +
@@ -212,8 +210,6 @@ func TestParseHexRejectsCorruption(t *testing.T) {
 		}
 	}
 }
-
-// --- client -----------------------------------------------------------------
 
 // fakeDevice is a loopback bootloader: it decodes command frames and replies with whatever the
 // test's handler returns.

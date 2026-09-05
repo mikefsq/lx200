@@ -103,11 +103,8 @@ func TestTelemetryReplies(t *testing.T) {
 		}
 	}
 
-	// A fault in flag 2 must clear exactly one named flag, not both.
-	//
-	// Which one is not established: this package maps index 2 to Dec and index 3 to RA, and
-	// PROTOCOL.md records the opposite. Both read O on a healthy mount, so nothing observed so
-	// far distinguishes them. This pins the current mapping rather than claiming it is right.
+	// A fault must clear exactly one motor flag. The Dec/RA mapping of indices
+	// 2 and 3 has not been verified on a faulted mount.
 	m, _ = newMount(map[string]string{":GY#": ":GYOXXO#"})
 	if st, err = m.SystemStatus(); err != nil || st.DecMotor == st.RAMotor {
 		t.Errorf("SystemStatus(:GYOXXO#) = %+v, %v; want exactly one motor flag cleared", st, err)

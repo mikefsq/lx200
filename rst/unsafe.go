@@ -13,8 +13,6 @@ type Unsafe struct{ m *Mount }
 // Unsafe exposes the destructive and unverified command families. See the Unsafe type.
 func (m *Mount) Unsafe() Unsafe { return Unsafe{m} }
 
-// --- factory calibration (:A) -----------------------------------------------
-
 // SetGearRatio writes the RA and Dec gear ratios (:Ag#). Persists to NVM. Every rate and slew
 // distance derives from these, and they are per-unit.
 func (u Unsafe) SetGearRatio(ra, dec int) error {
@@ -62,7 +60,6 @@ func (u Unsafe) SelectWiFiTransport() error { return u.m.Blind(":AW#") }
 // What it gates is not established.
 func (u Unsafe) SetTransmitFlag(v int) error { return u.m.Blind(fmt.Sprintf(":Ba%d#", v)) }
 
-// --- external SPI memory (:F) -----------------------------------------------
 //
 // The :F family bit-bangs an external SPI non-volatile memory using the 25-series command set.
 // What that memory holds is not known, and none of these has been run on hardware.
@@ -86,8 +83,6 @@ func (u Unsafe) SPIRaw(c byte, arg string) error {
 	return u.m.Blind(fmt.Sprintf(":F%c%s#", c, arg))
 }
 
-// --- engineering diagnostics (:X) -------------------------------------------
-
 // Diagnostic sends a :X factory-diagnostic command with a verbatim argument. Valid second
 // characters are A B C D E e F G H P R. None has been run on hardware.
 //
@@ -101,8 +96,6 @@ func (u Unsafe) Diagnostic(c byte, arg string) error {
 	}
 	return u.m.Blind(fmt.Sprintf(":X%c%s#", c, arg))
 }
-
-// --- periodic error correction (:P) -----------------------------------------
 
 // PEC sends one of the :P commands. Valid second characters are A a D F P p U u; A/a and P/p
 // are on/off pairs and U/u read the recorded data.

@@ -11,8 +11,6 @@ var ErrNotImplemented = errors.New("rainbow: not implemented on this mount")
 // ErrParked is returned by motion refused because the mount is parked.
 var ErrParked = errors.New("rainbow: the mount is parked")
 
-// --- home -------------------------------------------------------------------
-
 // AlpacaCanFindHome reports whether FindHome is supported. It is.
 func (m *Mount) AlpacaCanFindHome() bool { return true }
 
@@ -39,8 +37,6 @@ func (m *Mount) AlpacaAtHome() (bool, error) {
 	}
 	return m.AtHome()
 }
-
-// --- park -------------------------------------------------------------------
 
 // AlpacaCanPark reports whether Park is supported. It is.
 func (m *Mount) AlpacaCanPark() bool { return true }

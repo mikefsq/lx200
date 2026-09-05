@@ -151,8 +151,6 @@ func (f *Focuser) MoveAtSpeed(micronsPerSec int) (bool, error) {
 // Stop halts the focuser (:FocSqN#, no reply).
 func (f *Focuser) Stop() error { return f.m.Blind(f.cmd("Sq")) }
 
-// --- Legacy focuser-1 motion commands (:F…#) --------------------------------
-
 // Focuser1In starts inward motion of focuser 1 (:F+#).
 func (m *Mount) Focuser1In() error { return m.Blind(":F+#") }
 
@@ -170,8 +168,6 @@ func (m *Mount) Focuser1Halt() error { return m.Blind(":FQ#") }
 
 // Focuser1Speed sets focuser-1 speed by index n (:Fn#): 1=0.01mm/s, 2=0.1mm/s, …
 func (m *Mount) Focuser1Speed(n int) error { return m.Blind(fmt.Sprintf(":F%d#", n)) }
-
-// --- shared numeric-reply helpers -------------------------------------------
 
 // getIntPair parses an "A,B#" reply of two integers; "E#" is an error.
 func (m *Mount) getIntPair(cmd string) (int, int, error) {

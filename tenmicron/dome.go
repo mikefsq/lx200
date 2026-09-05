@@ -117,7 +117,6 @@ func (m *Mount) SetDomeMountType(n int) error {
 	return m.Blind(fmt.Sprintf(":SDT%d#", n))
 }
 
-// --- Dome slaving geometry + manual azimuth control (:SD* — no reply) --------
 // These configure the mount's internal dome-slaving model or take direct control of the
 // dome azimuth. All are firmware ≥ 1.6.4 except the manual-control pair (≥ 2.9.11).
 

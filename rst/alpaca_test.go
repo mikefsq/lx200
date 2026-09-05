@@ -138,9 +138,8 @@ func TestAtParkRejectsAPoleStowInTheWrongRotation(t *testing.T) {
 	}
 }
 
-// A known gap, pinned so it stays a decision. The handset's own parking preset measured
-// +089.49/-000.00: the RA axis is right but the Dec axis is below the band, so it reads
-// not-parked. Re-measure a handset park before widening parkDecAxisMin, then delete this test.
+// The handset park at +089.49/-000.00 is outside the driver's Dec tolerance.
+// Hardware measurements are needed before widening that tolerance.
 func TestAtParkDoesNotYetRecogniseTheHandsetPreset(t *testing.T) {
 	m, _ := newMount(map[string]string{":CY#": ":CY+089.49/-000.00#"})
 	if at, _ := m.AtPark(); at {

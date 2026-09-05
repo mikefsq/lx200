@@ -1,12 +1,4 @@
-// Package onstep drives OnStep / OnStepX open mount controllers over their
-// LX200-derived protocol, on the shared golx200 core. OnStep is feature-rich, but
-// this package is the TELESCOPE only — its focusers, rotator, GPIO/dew outputs,
-// and weather sensors are exposed as separate Alpaca devices (Focuser/Rotator/
-// Switch/ObservingConditions) built from the same connection.
-//
-// It follows the goam5 pattern (LX200Generic-style: :GU# status, :Te#/:Td#
-// tracking, numbered :R0#–:R9# rates → SetRate/MoveAxis overridden), with native
-// park (:hP#/:hR#) and a richer :GU# flag string.
+// Package onstep drives OnStep and OnStepX telescope controllers over serial and TCP.
 package onstep
 
 import (
@@ -21,7 +13,7 @@ import (
 
 const statusTTL = 150 * time.Millisecond
 
-// Mount is an OnStep controller on a golx200 LX200 connection.
+// Mount is an OnStep controller on a LX200 connection.
 type Mount struct {
 	*lx200.Conn
 
@@ -58,8 +50,6 @@ func newMount(tr lx200.Transport) *Mount {
 
 // Product returns the controller product name (:GVP#).
 func (m *Mount) Product() (string, error) { return m.Get(":GVP#") }
-
-// --- Status (:GU# flag string) ----------------------------------------------
 
 // Status is the decoded :GU# status. OnStep's encoding (per the INDI driver):
 // 'n'+'N' = idle, 'n' alone = slewing, 'N' alone = tracking; 'I' = parking,
@@ -108,8 +98,6 @@ func (m *Mount) invalidate() {
 	m.mu.Unlock()
 }
 
-// --- lx200.Mount (RA/Dec/SetTarget*/Halt inherited from the core) -----------
-
 func (m *Mount) Slewing() (bool, error)  { s, err := m.status(); return s.Slewing, err }
 func (m *Mount) Tracking() (bool, error) { s, err := m.status(); return s.Tracking, err }
 
@@ -140,8 +128,6 @@ func (m *Mount) SyncToTarget() (string, error) {
 	}
 	return s, err
 }
-
-// --- Optional capabilities --------------------------------------------------
 
 // Parker — native park/unpark (:hP#/:hR#); AtPark from :GU#.
 func (m *Mount) Park() error {
@@ -220,8 +206,6 @@ func (m *Mount) SetUTC(t time.Time) error {
 	return ack(m.Ack(u.Format(":SL15:04:05#")))
 }
 
-// --- Numbered slew rates (:R0#–:R9#) + MoveAxis override --------------------
-
 func (m *Mount) SetRate(r lx200.Rate) error { return m.SetSlewRateIndex(rateIndex(r)) }
 
 func (m *Mount) SetSlewRateIndex(i int) error {
@@ -268,8 +252,6 @@ func axisDir(a lx200.Axis, positive bool) lx200.Direction {
 	}
 }
 
-// --- OnStep vendor (Telescope-level; focuser/rotator/etc. are separate) ------
-
 // MountType reports the configured mount geometry (:GXEM#): 'E' GEM, 'K' Fork,
 // 'k' Fork-Alt, 'A' AltAz.
 func (m *Mount) MountType() (string, error) { return m.Get(":GXEM#") }
@@ -288,8 +270,6 @@ func (m *Mount) SetCustomTrackRate(raRate, decRate float64) error {
 	}
 	return m.okByte(fmt.Sprintf(":RE%04.4f#", decRate), '0')
 }
-
-// --- helpers ----------------------------------------------------------------
 
 func ack(ok bool, err error) error {
 	if err != nil {

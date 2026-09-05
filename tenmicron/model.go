@@ -10,8 +10,6 @@ import (
 	"github.com/mikefsq/lx200"
 )
 
-// --- Alignment-model build sequence (:newalig# / :newalpt / :endalig#) -------
-
 // StartAlignment begins a new alignment specification (:newalig#). It does not
 // clear the current model until EndAlignment recomputes it. Add points with
 // AddAlignmentSpecPoint, then call EndAlignment.
@@ -80,8 +78,6 @@ func (m *Mount) DeleteAlignment() error {
 	m.invalidate()
 	return nil
 }
-
-// --- Alignment-model query (:getalst# / :getain# / :getaliN#) ----------------
 
 // AlignmentStarCount returns the number of alignment stars in the current model
 // (:getalst#).
@@ -194,7 +190,6 @@ func (m *Mount) DeleteAlignmentStar(n int) error {
 	return nil
 }
 
-// --- Named alignment-model slots (:modelcnt / :modelnam / :modelld / …) ------
 // Save, name, load and delete whole alignment models stored in the mount (firmware ≥
 // 2.13.3). Model names are case-sensitive, at most 15 characters, with trailing spaces
 // ignored, and are escaped on the wire (see escape.go).
@@ -241,8 +236,6 @@ func (m *Mount) modelSlot(verb, name, action string) error {
 	}
 	return nil
 }
-
-// --- formatters -------------------------------------------------------------
 
 // hmsTenths formats hours as "HH:MM:SS.S" (wrapping into [0,24)).
 func hmsTenths(hours float64) string {

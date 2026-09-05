@@ -63,8 +63,6 @@ func (m *Mount) SetSpeedCorrection(on bool) (bool, error) {
 // single status byte, no '#' terminator (see getBoolByte).
 func (m *Mount) SpeedCorrection() (bool, error) { return m.getBoolByte(":GSC#") }
 
-// --- Temperature sensors (:GTMP…#) ------------------------------------------
-
 // TemperatureElement identifies a sensor for Temperature (:GTMPn#). Motor, heater and
 // electronics-box sensors exist only on special-purpose mounts; the keypad sensors need
 // a physical v2 keypad.
@@ -254,10 +252,7 @@ func (m *Mount) getBool(cmd string) (bool, error) {
 	return strings.TrimSpace(s) == "1", nil
 }
 
-// getBoolByte reads a SINGLE status character with no '#' terminator as a boolean —
-// the shape of the 10Micron "get flag" queries that reply one bare char (:GREF#,
-// :GSC#). Reading these with getBool (read until '#') stalls the whole command
-// timeout, the same bug class as :h?#/:Guaf#.
+// getBoolByte reads a bare status byte, with 1 meaning true.
 func (m *Mount) getBoolByte(cmd string) (bool, error) {
 	b, err := m.AckByte(cmd)
 	if err != nil {

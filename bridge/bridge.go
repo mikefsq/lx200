@@ -1,37 +1,4 @@
-// Package bridge serves an LX200 TCP front-end onto a lx200.Mount, letting sky
-// atlases that speak the Meade LX200 telescope protocol — Stellarium's
-// TelescopeControl ("Meade LX200") and SkySafari's LX200 mode — drive a mount
-// that the fleet already owns.
-//
-// It is the server inverse of the lx200 client core: where the core sends
-// :CMD# frames to a mount, the bridge answers them. It is a *consumer* of a
-// lx200.Mount — exactly like the Alpaca Telescope wrapper — never a layer above
-// it. The two front-ends sit side by side over the same mount, which remains the
-// single source of truth:
-//
-//	          lx200.Mount  (the device; manages the connection)
-//	         /          \
-//	Alpaca Telescope     bridge.Server (this package)
-//	(goalpaca-devices)    LX200 TCP for Stellarium / SkySafari
-//
-// State integrity across the two front-ends rests on two rules the bridge keeps:
-//
-//   - No cached device state. Every :GR#/:GD#/:GA#/:GZ# query reads live from the
-//     Mount, so a change made through the Alpaca side is visible here at once and
-//     vice-versa. The mount's own per-command serialization makes each read
-//     consistent.
-//   - Atomic target writes. The LX200 client sends :Sr (RA), :Sd (Dec) and :MS#
-//     (slew) as three separate messages; the bridge buffers RA/Dec per connection
-//     (the client's intent — the LX200 analogue of Alpaca's remembered
-//     TargetRightAscension) and writes the device's target register only inside an
-//     OpLock-guarded SetTarget→act sequence at :MS#/:CM# time. With the Alpaca
-//     wrapper taking the same OpLock for its slews, the two front-ends can never
-//     interleave their set-target sequences and leave the mount aiming at one
-//     client's RA with another's Dec.
-//
-// NexStar (SkySafari's other mode) is the same semantics over different framing;
-// it can be added as a second front-end over the same Mount source without
-// touching this file.
+// Package bridge serves an lx200.Mount to LX200 TCP clients.
 package bridge
 
 import (
@@ -73,14 +40,7 @@ type Server struct {
 	ln            net.Listener
 	cachedProduct string // mount's real :GVP# once read (static; avoids a live round-trip per query)
 
-	// Cached site/offset facts the bridge re-formats into Meade dialect for site and
-	// date/time queries. Read from the mount lazily on the first client query that
-	// needs them (they're static) and cached thereafter, so only that first identify
-	// pays a round-trip and every later one answers from cache. Deliberately NOT
-	// pre-warmed at startup: the bridge shares the mount's serial line with the Alpaca
-	// driver, and a background poll racing the driver's just-connected, still-settling
-	// link bounced the connection. The bridge now touches the mount only when a client
-	// actually asks. Refreshed when a client sets them.
+	// Site and UTC offset are loaded on demand and cached until a client updates them.
 	siteLat, siteLon  float64       // degrees; longitude East-positive
 	utcOff            time.Duration // hours added to local time to obtain UTC
 	haveSite, haveOff bool
@@ -99,10 +59,8 @@ func WithIdent(product, version string) Option {
 	return func(s *Server) { s.product, s.version = product, version }
 }
 
-// WithReadOnlySite makes the bridge ACCEPT a client's site/time set commands
-// (:St/:Sg/:SG/:SL/:SC reply '1') but NOT write them to the mount — for a mount with a
-// pointing model, where letting an atlas overwrite the surveyed site/clock would
-// invalidate the model. Reads (:Gg#/:Gt#/:GC#/…) still report the mount's real values.
+// WithReadOnlySite acknowledges site/time writes without applying them.
+// Use it to preserve the mount's configured site and clock.
 func WithReadOnlySite() Option { return func(s *Server) { s.roSite = true } }
 
 // WithLogger sets a diagnostics sink (e.g. log.Printf). Nil disables logging.
@@ -285,19 +243,12 @@ func (s *Server) dispatch(conn net.Conn, cmd string, st *connState) {
 	case len(cmd) == 2 && cmd[0] == 'R' && strings.IndexByte("GCMS", cmd[1]) >= 0: // :RG/:RC/:RM/:RS#
 		s.setRate(cmd[1])
 	default:
-		// Unknown query (G…) would hang a client waiting for '#'; answer empty FAST.
-		// (We deliberately do NOT forward it live to the mount: tight-timeout clients
-		// like Stellarium time out on a ~100 ms round-trip and then desync, and the
-		// mount's native LX200 dialect — ':' separators, ISO dates — isn't what a Meade
-		// client parses anyway.) Anything non-G is a no-reply command we don't
-		// implement — ignore.
+		// Unknown queries return an empty reply; unsupported non-query commands are ignored.
 		if strings.HasPrefix(cmd, "G") {
 			s.write(conn, "#")
 		}
 	}
 }
-
-// --- coordinate reads (always live, never cached) ---
 
 func (s *Server) getCoord(conn net.Conn, read func(lx200.Mount) (float64, error), format func(float64) string) {
 	m, err := s.mount()
@@ -314,12 +265,7 @@ func (s *Server) getCoord(conn net.Conn, read func(lx200.Mount) (float64, error)
 	s.write(conn, format(v)+"#")
 }
 
-// productName returns the connected mount's product string (:GVP#) when it can report
-// one, falling back to the bridge's configured identity (WithIdent / "lx200-bridge")
-// when the mount is down or doesn't implement Productizer. The real product is static,
-// so the first successful read is cached — later :GVP# queries answer instantly (a
-// slow live round-trip per identify is what desyncs a client with a per-command
-// timeout).
+// productName caches the mount product name, falling back to the configured identity.
 func (s *Server) productName() string {
 	s.mu.Lock()
 	cached := s.cachedProduct
@@ -340,17 +286,8 @@ func (s *Server) productName() string {
 	return s.product
 }
 
-// --- Meade site / date-time layer ------------------------------------------
-//
-// Clients like iOS Stellarium read site coordinates and date/time at connect and need
-// them in classic Meade format (DDD*MM#, MM/DD/YY#, sHH#) — the mount's native LX200
-// dialect (':' separators, ISO dates, signed longitude) doesn't parse. The bridge
-// reads the static facts (site, UTC offset) from the mount lazily — on the first
-// client query that needs them — and re-formats them; date/time come from the box
-// clock shifted by the offset (the box runs at the site's zone). Only the first such
-// query pays a round-trip; it is cached, so every later one answers instantly. The
-// bridge intentionally does no background polling, so it never contends with the
-// Alpaca driver for the mount's serial line when no client is asking.
+// Site queries use Meade formatting and cached mount settings. Date and time
+// use the host clock with the configured UTC offset.
 
 // site returns the cached observing-site lat/lon (degrees, lon East-positive), reading
 // and caching them from the mount on first use. ok is false until a SiteReader mount is
@@ -632,8 +569,6 @@ func (s *Server) distance(conn net.Conn) {
 	s.write(conn, "#") // empty = slew complete / not moving
 }
 
-// --- target buffering + atomic goto/sync ---
-
 func (s *Server) setTarget(conn net.Conn, val string, lo, hi float64, dst *float64, have *bool) {
 	v, err := lx200.ParseSexagesimal(val)
 	if err != nil || v < lo || v >= hi+1e-9 {
@@ -725,8 +660,6 @@ func withOp(m lx200.Mount, f func() error) error {
 	return f()
 }
 
-// --- halt / manual motion (manual motion is optional per mount) ---
-
 func (s *Server) halt(conn net.Conn) {
 	if m, err := s.mount(); err == nil {
 		if err := m.Halt(); err != nil {
@@ -781,8 +714,6 @@ func (s *Server) setRate(r byte) {
 		}
 	}
 }
-
-// --- formatting helpers ---
 
 func formatRA(hours float64) string { return lx200.FormatHMS(hours) }
 func formatDec(deg float64) string  { return lx200.FormatDMS(deg, '*') }

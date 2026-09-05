@@ -1,13 +1,4 @@
-// Package am5 drives ZWO AM-series harmonic mounts (AM3/AM5/AM5N/AM7) over the
-// LX200 protocol, on the shared golx200 core. ZWO mounts speak USB-serial (9600)
-// and WiFi/TCP (default 192.168.4.1:4030); both are supported.
-//
-// It follows the gotenmicron reference pattern (embed *lx200.Conn, a cached
-// status, the lx200.Mount + optional capabilities), with two AM5-specific
-// twists: status is split across :GU# (slew/home/mode) and :GAT# (tracking),
-// and slew rates are numbered (:R0#–:R9#) rather than the core's letter presets,
-// so SetRate AND MoveAxis are overridden (the core's MoveAxis calls the core's
-// SetRate statically — Go embedding is not virtual).
+// Package am5 drives ZWO AM-series mounts over USB-serial and WiFi/TCP.
 package am5
 
 import (
@@ -23,7 +14,7 @@ import (
 
 const statusTTL = 150 * time.Millisecond
 
-// Mount is a ZWO AM-series mount on a golx200 LX200 connection.
+// Mount is a ZWO AM-series mount on a LX200 connection.
 type Mount struct {
 	*lx200.Conn
 
@@ -50,8 +41,6 @@ func Dial(addr string) (*Mount, error) {
 	}
 	return &Mount{Conn: lx200.New(tr, 3*time.Second)}, nil
 }
-
-// --- Status (:GU# + :GAT#) --------------------------------------------------
 
 // Status is the decoded AM5 status. :GU# is parsed by character presence (as the
 // ZWO firmware/INDI driver do): 'N' = slew complete, 'H' = at home, 'Z' = AltAz
@@ -94,7 +83,6 @@ func (m *Mount) invalidate() {
 	m.mu.Unlock()
 }
 
-// --- lx200.Mount ------------------------------------------------------------
 // RA/Dec/SetTarget*/Halt come from the embedded core (:GR#/:GD#/:Sr/:Sd/:Q#).
 
 func (m *Mount) Slewing() (bool, error)  { s, err := m.status(); return s.Slewing, err }
@@ -128,8 +116,6 @@ func (m *Mount) SyncToTarget() (string, error) {
 	}
 	return s, err
 }
-
-// --- Optional capabilities --------------------------------------------------
 
 // Parker: AM5 has no distinct park position — Park goes home (:hC#) and we track
 // the parked state in software; Unpark just clears it.
@@ -225,8 +211,6 @@ func (m *Mount) SetUTC(t time.Time) error {
 	return must(m.Ack(t.Format(":SC01/02/06#"))) // local date, mm/dd/yy
 }
 
-// --- Slew rate (numbered) + MoveAxis override -------------------------------
-
 // SetRate maps the core's four letter presets onto AM5's numbered rates. It
 // overrides the embedded core's SetRate so manual slewing uses :R0#–:R9#.
 func (m *Mount) SetRate(r lx200.Rate) error { return m.SetSlewRateIndex(rateIndex(r)) }
@@ -276,8 +260,6 @@ func axisDir(a lx200.Axis, positive bool) lx200.Direction {
 		return lx200.South
 	}
 }
-
-// --- AM5 vendor commands (exposed by the Alpaca wrapper as Actions) ----------
 
 // MountMode reports the equatorial/AltAz mode (from :GU#).
 type MountMode int
@@ -382,8 +364,6 @@ func (m *Mount) SetMeridianFlip(f MeridianFlip) error {
 	}
 	return must(m.Ack(fmt.Sprintf(":STa%d%d%c%02d#", b2i(f.Enabled), b2i(f.TrackPast), sign, limit)))
 }
-
-// --- helpers ----------------------------------------------------------------
 
 func must(ok bool, err error) error {
 	if err != nil {

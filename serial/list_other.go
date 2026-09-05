@@ -8,8 +8,7 @@ import (
 	"go.bug.st/serial/enumerator"
 )
 
-// listPorts enumerates serial ports with USB details via go.bug.st/serial's
-// enumerator, which is pure Go on every non-darwin OS and reports VID/PID/serial.
+// listPorts enumerates serial ports with USB identifiers.
 func listPorts() ([]PortInfo, error) {
 	ports, err := enumerator.GetDetailedPortsList()
 	if err != nil {

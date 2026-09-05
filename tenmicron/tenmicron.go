@@ -1,14 +1,4 @@
-// Package gotenmicron drives a 10Micron GM-series mount over the LX200 protocol
-// (TCP, port 3490/3492), built on the shared golx200 core. It is the reference
-// per-mount library: it embeds *lx200.Conn for the common command set and adds
-// the 10Micron-specific status, tracking, park, site, and refraction/model
-// commands, satisfying lx200.Mount plus the Parker/PierSider/Horizontal/
-// SiteSetter/Clock optional capabilities.
-//
-// This file holds the core: the Mount type, connection, the :Ginfo# combined
-// status, and the lx200.Mount status-derived members. The rest of the protocol is
-// grouped by topic in sibling files (tracking.go, altaz.go, sitetime.go, dome.go,
-// focuser.go, …).
+// Package tenmicron drives 10Micron GM-series mounts over TCP.
 package tenmicron
 
 import (
@@ -28,7 +18,7 @@ import (
 // other front-ends ride the poller's cache rather than each refetching.
 const defaultStatusTTL = 150 * time.Millisecond
 
-// Mount is a 10Micron mount on a golx200 LX200 connection.
+// Mount is a 10Micron mount on a LX200 connection.
 type Mount struct {
 	*lx200.Conn
 
@@ -80,12 +70,9 @@ func Connect(addr string) (*Mount, error) {
 	return m, nil
 }
 
-// SetStatusTTL sets how long a :Ginfo# status read is cached before the next read
-// refetches. The default (150 ms) just coalesces one poll's burst of getters. A
-// consumer that runs its own status poller (the Alpaca driver) raises it PAST the
-// poll interval and drives the cache with Refresh, so concurrent front-ends — the
-// LX200 bridge, the INDI server — ride the poller's cache instead of each issuing
-// their own round-trip on the single mount link. Safe to call anytime.
+// SetStatusTTL sets the status cache lifetime (default 150 ms).
+// A dedicated poller can call Refresh and set the TTL above its poll interval.
+// It is safe to change the TTL concurrently.
 func (m *Mount) SetStatusTTL(d time.Duration) {
 	m.mu.Lock()
 	m.statusTTL = d
@@ -100,8 +87,6 @@ func (m *Mount) Refresh() (Status, error) {
 	m.invalidate()
 	return m.status()
 }
-
-// --- Status (:Ginfo#) -------------------------------------------------------
 
 // Status is the decoded :Ginfo# combined-status reply.
 type Status struct {
@@ -226,8 +211,6 @@ func parseGinfo(s string) (Status, error) {
 	return st, nil
 }
 
-// --- lx200.Mount members served from :Ginfo# --------------------------------
-
 // RA returns the current right ascension in hours (from :Ginfo#).
 func (m *Mount) RA() (float64, error) { s, err := m.status(); return s.RA, err }
 
@@ -332,8 +315,6 @@ func (m *Mount) Halt() error {
 	return nil
 }
 
-// --- Manual axis motion (override to reflect jogs in Slewing) ----------------
-
 // MoveAxis starts a continuous manual slew on an axis and records it so Slewing()
 // reports the jog (see Slewing). Otherwise inherits the core's rate-preset behaviour.
 func (m *Mount) MoveAxis(a lx200.Axis, positive bool, r lx200.Rate) error {
@@ -423,8 +404,6 @@ func (m *Mount) manuallyMoving() bool {
 	defer m.mu.Unlock()
 	return m.movingPrimary || m.movingSecondary
 }
-
-// --- shared helpers ---------------------------------------------------------
 
 // must turns an LX200 set-command ack into an error.
 func must(ok bool, err error) error {

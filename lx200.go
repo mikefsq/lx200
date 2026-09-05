@@ -1,20 +1,4 @@
-// Package lx200 is a transport-agnostic core for the Meade LX200 command family
-// — the `:CMD#`-framed serial/TCP protocol spoken (with vendor extensions) by
-// 10Micron, Rainbow Astro (RST), ZWO (AM5/AM7) and many other mounts.
-//
-// A per-mount library opens the link (serial or TCP), hands the resulting
-// io.ReadWriteCloser to New, and builds on the shared command set here, adding
-// only its vendor-specific commands. The core fixes the framing the hand-rolled
-// prototypes get wrong: every LX200 reply is one of four shapes, selected by the
-// primitive you call —
-//
-//	Blind — no reply              (e.g. :Q#, :Mn#, :RG#)
-//	Ack   — one byte '0'/'1'      (the :Sr / :Sd / :St … "set" commands)
-//	Get   — read until '#'        (the :Gx# queries)
-//	Slew  — :MS#: '0' = started, else a '#'-terminated fault string
-//
-// All commands are serialized (the mount answers only the in-flight query) and
-// bounded by a read deadline.
+// Package lx200 implements the Meade LX200 command protocol over serial and TCP.
 package lx200
 
 import (
@@ -53,9 +37,8 @@ func New(t Transport, timeout time.Duration) *Conn {
 	return &Conn{t: t, timeout: timeout}
 }
 
-// DialTCP opens a TCP transport to addr ("host:port") — the usual link for
-// 10Micron (3490/3492) and ZWO WiFi mounts. The returned *net.Conn satisfies
-// Transport and supports per-command read deadlines.
+// DialTCP opens a TCP transport to addr ("host:port") with read-deadline support.
+// A nonpositive dialTimeout uses five seconds.
 func DialTCP(addr string, dialTimeout time.Duration) (Transport, error) {
 	if dialTimeout <= 0 {
 		dialTimeout = 5 * time.Second
@@ -74,22 +57,12 @@ func (c *Conn) Close() error {
 	return c.t.Close()
 }
 
-// OpLock serializes a multi-command logical operation — a goto or sync, which is
-// the :Sr→:Sd→:MS# (or :CM#) set-target-then-act sequence — against other such
-// operations on this mount, and returns the function to end it. It exists so
-// independent front-ends that share one mount (the Alpaca Telescope wrapper and
-// the LX200 bridge) cannot interleave their set-target sequences and leave the
-// device's single target register holding one client's RA with another's Dec.
+// OpLock locks a multi-command operation and returns its unlock function.
+// All callers sharing a mount must use this lock around target-setting and
+// slew/sync sequences to prevent interleaved targets. Individual commands
+// remain serialized independently.
 //
-// It guards only the per-command mutex's blind spot: the gap *between* commands.
-// Individual commands stay serialized by mu as before; OpLock is a second, outer
-// lock taken for the duration of a sequence. Use it as:
-//
-//	defer m.OpLock()()
-//	m.SetTargetRA(ra); m.SetTargetDec(dec); m.SlewToTarget()
-//
-// Callers that go through the Mount interface discover it via the OpLocker
-// assertion; a mount that does not provide it simply runs without the outer lock.
+//	defer c.OpLock()()
 func (c *Conn) OpLock() func() {
 	c.opMu.Lock()
 	return c.opMu.Unlock
@@ -98,12 +71,7 @@ func (c *Conn) OpLock() func() {
 // ErrTimeout is returned when a reply does not arrive within the command timeout.
 var ErrTimeout = errors.New("lx200: timed out waiting for reply")
 
-// ErrNoMatch is returned by GetMatching when it exhausts its skip budget without a reply the
-// caller accepts. It means the stream held more unexpected frames — stray completion tokens,
-// or another front-end's interleaved reply — than the skip budget allowed, NOT that the reply
-// was wrong. A caller that sees it should drain and retry rather than trust any value: the
-// alternative, returning the last unmatched frame, is a value the caller cannot distinguish
-// from a real one and will mis-parse.
+// ErrNoMatch reports that GetMatching exhausted its unmatched-reply budget.
 var ErrNoMatch = errors.New("lx200: no matching reply within the skip budget")
 
 // Blind sends a command that produces no reply (halt, slewing-rate, move).
@@ -128,11 +96,8 @@ func (c *Conn) Ack(cmd string) (bool, error) {
 	return b == '1', nil
 }
 
-// AckByte sends a "set" command whose reply is a single status byte (no '#')
-// and returns that byte raw, for protocols whose success value is not '1' or
-// varies by command — OnStep, for one, answers '0' = success for some commands
-// and '1' for others. The byte is always consumed, so the next command's read
-// stays in sync; the caller decides which value means success.
+// AckByte sends a command and returns its single status byte without a terminator.
+// The caller interprets the command-specific success value.
 func (c *Conn) AckByte(cmd string) (byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -152,11 +117,8 @@ func (c *Conn) Get(cmd string) (string, error) {
 	return c.readUntil('#', c.timeout)
 }
 
-// Await reads a '#'-terminated message the mount pushes WITHOUT a prompt — e.g.
-// Rainbow's asynchronous slew-completion token (:MM0#) — waiting up to timeout
-// (ErrTimeout if none arrives). It is the one departure from strict request/
-// response, for mounts that signal completion by an unsolicited push rather than
-// a status query. Serialized with commands by the same mutex.
+// Await reads an unsolicited, hash-terminated message without sending a command.
+// A nonpositive timeout uses the connection timeout; expiration returns ErrTimeout.
 func (c *Conn) Await(timeout time.Duration) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -166,21 +128,9 @@ func (c *Conn) Await(timeout time.Duration) (string, error) {
 	return c.readUntil('#', timeout)
 }
 
-// GetMatching sends a query and returns the first '#'-terminated reply for which
-// accept reports true, forwarding each earlier non-matching message to skip. It is
-// for mounts (Rainbow RST) that interleave unsolicited completion tokens with query
-// replies: an async token (:MM0#/:CHO#) can land in the buffer just ahead of the
-// real reply, so the reply must be found by matching, not by position.
-//
-// The whole write-and-resync runs under one lock hold. Doing the same with a Get
-// followed by Await — two separate lock acquisitions — leaves a gap a concurrent
-// command on another goroutine can wedge into, writing its own command and stealing
-// the matching reply (then everyone reads one reply off, and the missing reply
-// surfaces as a spurious ErrTimeout). Holding the lock across the resync makes it
-// safe when several front-ends share one mount, e.g. the Alpaca Telescope wrapper
-// and the LX200 bridge polling the same RST. At most maxSkip non-matching messages
-// are consumed; if none matches, the last one read is returned so the caller can
-// parse it best-effort (the pre-existing behavior).
+// GetMatching sends a query and reads until accept returns true, under one lock.
+// It forwards up to maxSkip unmatched frames to skip, if non-nil. One further
+// unmatched frame returns ErrNoMatch with no reply value.
 func (c *Conn) GetMatching(cmd string, accept func(string) bool, skip func(string), maxSkip int) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -204,22 +154,9 @@ func (c *Conn) GetMatching(cmd string, accept func(string) bool, skip func(strin
 	}
 }
 
-// SlewNack issues a slew-initiating command on a mount that answers only when it REFUSES, and
-// returns that refusal ("" when the mount stayed silent, i.e. accepted).
-//
-// Some mounts do not acknowledge a slew at all: a Rainbow RST answers ":MS#" with nothing when it
-// starts moving, and echoes the command with a fault suffix ("MSZZ#") when it will not. Slew is
-// the wrong shape for that — it blocks for the whole command timeout waiting for a byte that an
-// accepted slew never sends, turning every successful goto into a timeout.
-//
-// The write and the bounded listen happen under one hold of the command mutex. That matters more
-// than it looks: without it a background poll can slip between them and have ITS reply read as the
-// slew's answer, which is how a completion token from an earlier move gets reported as this
-// command's fault.
-//
-// window bounds the wait for a refusal; a non-positive window means the command timeout. An
-// unsolicited token can still land inside the window, so the caller must be prepared for a
-// returned string that is a token rather than a fault, and route it.
+// SlewNack sends a command and waits for a hash-terminated refusal.
+// Silence returns an empty string and nil error. A nonpositive window uses the
+// connection timeout. Callers must distinguish unsolicited tokens from refusals.
 func (c *Conn) SlewNack(cmd string, window time.Duration) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -264,8 +201,6 @@ func (c *Conn) Slew(cmd string) error {
 	// leave the reader hunting for a code that never appears on the wire.
 	return fmt.Errorf("lx200: slew rejected: %c%s", b, reason)
 }
-
-// --- framing internals (caller holds mu) ---
 
 func (c *Conn) write(cmd string) error {
 	if _, err := io.WriteString(c.t, cmd); err != nil {

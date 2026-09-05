@@ -172,8 +172,7 @@ func TestSetGuideRateRange(t *testing.T) {
 	}
 }
 
-// TestISODateParsing: in ultra-precision mode the mount returns ISO dates, which the
-// getters must parse (they previously assumed MM/DD/YY and failed).
+// TestISODateParsing checks the ISO dates returned in ultra-precision mode.
 func TestISODateParsing(t *testing.T) {
 	m, _ := newMount(map[string]string{
 		":GUDT#": "2026-06-02,15:04:05#",

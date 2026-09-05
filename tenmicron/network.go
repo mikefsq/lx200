@@ -104,8 +104,6 @@ func (m *Mount) ConfigureWirelessClientStatic(ssid string, enc WirelessEncryptio
 		escapeString(ssid), enc, escapeString(key), ip, netmask, gateway))
 }
 
-// --- Network discovery service + web interface (:NT* , firmware ≥ 2.16.5) ----
-
 // DiscoveryService is the state of the mount's network discovery service (:NTGdisc#).
 type DiscoveryService struct {
 	Available bool

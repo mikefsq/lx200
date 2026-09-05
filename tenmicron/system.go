@@ -175,8 +175,6 @@ func (m *Mount) SetAutoPowerOn(on bool) error {
 	return must(m.Ack(fmt.Sprintf(":SAPO%d#", b2i(on))))
 }
 
-// --- Mount classification (from :GVP#, read at Connect) ---------------------
-
 // MountClass is the geometry/series of the connected mount, parsed from the :GVP#
 // product name.
 type MountClass struct {

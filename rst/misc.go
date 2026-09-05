@@ -9,8 +9,6 @@ import (
 	"github.com/mikefsq/lx200"
 )
 
-// --- closing the setter/getter asymmetries ----------------------------------
-
 // ForcePierFlip reads the forced-meridian-flip flag (:AF#). SetForcePierFlip writes it and is
 // blind, so this is the only way to confirm it.
 func (m *Mount) ForcePierFlip() (bool, error) {
@@ -39,8 +37,6 @@ func (m *Mount) ModelName() (string, error) {
 	s, err := m.get(":AM#", ":AM")
 	return strings.TrimSpace(s), err
 }
-
-// --- clock format -----------------------------------------------------------
 
 // ClockFormat reads the 12- or 24-hour display format (:Gc#). The reply carries no echo prefix.
 func (m *Mount) ClockFormat() (int, error) {
@@ -74,8 +70,6 @@ func (m *Mount) SetClockFormat(hours int) error {
 	return m.ToggleClockFormat()
 }
 
-// --- date -------------------------------------------------------------------
-//
 // The write makes the mount recompute its planetary ephemeris, so it is not a routine clock
 // sync. SetUTC calls it only when the mount's date is wrong.
 func (m *Mount) SetDate(mm, dd, yy int) error {
@@ -97,8 +91,6 @@ func (m *Mount) SetDate(mm, dd, yy int) error {
 	}
 	return nil
 }
-
-// --- alignment and offsets --------------------------------------------------
 
 // SyncCurrent syncs the mount to its own current position (:CM#), the plain Meade sync rather
 // than the coordinate-carrying :Ck# used elsewhere here. Answers a CM frame.
@@ -131,8 +123,6 @@ func (m *Mount) GotoOffsetFlag() (string, error) {
 	return strings.TrimSpace(s), err
 }
 
-// --- slew limits ------------------------------------------------------------
-
 // SetSlewLimit writes one of the six axis-limit registers SlewLimits reads (:Ca# to :Cf#,
 // index 0 to 5). The motion controller enforces these, and a goto that violates one is refused
 // with an MSZZ# frame. Read back with SlewLimits.
@@ -142,8 +132,6 @@ func (m *Mount) SetSlewLimit(i int, v float64) error {
 	}
 	return m.Blind(fmt.Sprintf(":C%c%.3f#", 'a'+byte(i), v))
 }
-
-// --- motion variants --------------------------------------------------------
 
 // SlewToTargetAlt sends :MD#, a second goto using the same alt/az target as :MA# and refusing
 // the same way. How it differs from :MA# is not established.
@@ -176,8 +164,6 @@ func (m *Mount) SetEncoderRate(lower byte, arg string) error {
 	return m.Blind(fmt.Sprintf(":M%c%s#", lower, arg))
 }
 
-// --- commands whose meaning is not established ------------------------------
-//
 // CounterI reads :CI#, a five-digit field that was zero on the development mount.
 func (m *Mount) CounterI() (string, error) {
 	s, err := m.get(":CI#", ":CI")

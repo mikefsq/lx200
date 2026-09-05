@@ -1,24 +1,4 @@
-// Command tenmicron is a low-level interactive console for 10Micron GM-series
-// mounts over the LX200 protocol (TCP, port 3490/3492). It is the sibling of the
-// rst console and the proven reference: the 10Micron library is tested against
-// real hardware, so this tool doubles as a known-good baseline when comparing wire
-// behavior against the untested RST.
-//
-// It exposes the same raw LX200 primitives (g/a/b/w) as the rst console plus the
-// typed tenmicron.Mount API. Unlike the RST, the 10Micron answers a single combined
-// status query (:Ginfo#) — see the 'ginfo' command. The 'dump' command sweeps every
-// no-arg read-only getter in one pass and prints value/err per command — the fast
-// way to see, on real hardware, which queries the mount answers and which the driver
-// still mis-parses (the single-byte-vs-#-terminated reply shapes especially). The
-// 'set*' verbs round-trip the driver's encoders (target/site/time/limits/rates/
-// refraction/backlash) through the wire so a following 'dump' shows what stuck.
-//
-// Usage:
-//
-//	tenmicron -addr 10.0.1.51:3492      # open a REPL
-//	tenmicron -addr 10.0.1.51:3492 ra   # one-shot
-//	tenmicron -addr 10.0.1.51:3492 dump # one-shot read-only validation sweep
-//	tenmicron -addr 10.0.1.51:3492 g :GVN#
+// Command tenmicron provides an interactive console for 10Micron mounts.
 package main
 
 import (
@@ -83,7 +63,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 	args := fields[1:]
 
 	switch verb {
-	// --- raw protocol primitives --------------------------------------------
 	case "g", "get":
 		if len(args) != 1 {
 			fmt.Println("usage: g :CMD#")
@@ -120,7 +99,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 		}
 		report(m.Await(d))
 
-	// --- typed reads: position / status -------------------------------------
 	case "ra":
 		reportF(m.RA())
 	case "dec":
@@ -159,7 +137,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 		ginfo(m)
 	case "dump":
 		dump(m)
-	// --- version / system ---------------------------------------------------
 	case "version", "ver":
 		report(m.Firmware())
 	case "fwdate":
@@ -188,7 +165,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 		}
 		reportErr(m.AcknowledgeAlarm(tenmicron.Alarm(n)))
 
-	// --- grouped read dumps -------------------------------------------------
 	case "clock", "site":
 		runProbes(clockProbes(m))
 	case "limits":
@@ -227,7 +203,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 	case "model":
 		model(m)
 
-	// --- target setters (round-trip the coordinate encoders) ----------------
 	case "sr", "settargetra":
 		if h, ok := pF(args, "sr <hours>"); ok {
 			reportOK(m.SetTargetRA(h))
@@ -245,7 +220,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportOK(m.SetTargetAzimuth(d))
 		}
 
-	// --- site / time setters ------------------------------------------------
 	case "setsitelat":
 		if d, ok := pF(args, "setsitelat <deg>"); ok {
 			reportErr(m.SetSiteLatitude(d))
@@ -282,7 +256,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 	case "updategps":
 		reportOK(m.UpdateFromGPS())
 
-	// --- limit setters ------------------------------------------------------
 	case "sethighalt":
 		if d, ok := pI(args, "sethighalt <deg>"); ok {
 			reportOK(m.SetHighAltitudeLimit(d))
@@ -312,7 +285,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportErr(m.SetUnattendedFlip(on))
 		}
 
-	// --- rate setters -------------------------------------------------------
 	case "setmaxslew":
 		if d, ok := pI(args, "setmaxslew <degPerSec>"); ok {
 			reportOK(m.SetMaxSlewRate(d))
@@ -350,11 +322,9 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportErr(m.SetGuiderPortEnabled(on))
 		}
 
-	// --- precision setters --------------------------------------------------
 	case "precision":
 		precision(m, args)
 
-	// --- refraction setters -------------------------------------------------
 	case "setrefraction":
 		if len(args) != 2 {
 			fmt.Println("usage: setrefraction <hPa> <tempC>")
@@ -384,7 +354,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportOK(m.SetSpeedCorrection(on))
 		}
 
-	// --- backlash setters ---------------------------------------------------
 	case "setdecbacklash":
 		if v, ok := pF(args, "setdecbacklash <arcsec>"); ok {
 			reportErr(m.SetDecBacklash(v))
@@ -394,7 +363,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportErr(m.SetRABacklash(v))
 		}
 
-	// --- tracking config setters --------------------------------------------
 	case "trackrate":
 		if r, ok := parseTrackRate(args); ok {
 			reportErr(m.SetTrackRate(r))
@@ -416,7 +384,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 			reportErr(m.SetTrackRateArcsec(v))
 		}
 
-	// --- goto / sync (wait for the slew to finish) --------------------------
 	case "slew":
 		startWait(m, m.SlewToTarget())
 	case "slewfine":
@@ -470,7 +437,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 	case "halt": // :Q# — stops slewing only
 		reportErr(m.Halt())
 
-	// --- tracking on/off ----------------------------------------------------
 	case "track":
 		if on, ok := onOff(args); ok {
 			reportErr(m.SetTracking(on))
@@ -482,7 +448,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 	case "lunar":
 		reportErr(m.TrackLunar())
 
-	// --- manual motion ------------------------------------------------------
 	case "move":
 		if d, ok := dir(args); ok {
 			reportErr(m.Move(d))
@@ -510,8 +475,6 @@ func run(m *tenmicron.Mount, line string, timeout time.Duration) {
 		fmt.Printf("unknown command %q (try 'help')\n", verb)
 	}
 }
-
-// --- argument parsers -------------------------------------------------------
 
 func pF(args []string, usage string) (float64, bool) {
 	if len(args) != 1 {
@@ -690,8 +653,6 @@ func axis(args []string) (lx200.Axis, bool) {
 	return 0, false
 }
 
-// --- action helpers ---------------------------------------------------------
-
 // moveAxis drives an axis at an EXACT rate in deg/s (MoveAxisRate), unlike the
 // coarse preset 'move'. usage: moveaxis pri|sec +|- <degPerSec>
 func moveAxis(m *tenmicron.Mount, args []string) {
@@ -801,8 +762,6 @@ func waitSlew(m *tenmicron.Mount) {
 	fmt.Println("timeout waiting for slew to finish")
 }
 
-// --- multi-value dumps ------------------------------------------------------
-
 func ginfo(m *tenmicron.Mount) {
 	s, err := m.Refresh()
 	if err != nil {
@@ -868,7 +827,6 @@ func model(m *tenmicron.Mount) {
 		info.AzTurns, info.AltTurns, info.Terms, info.RMSArcsec)
 }
 
-// --- peripherals: focuser / rotator / dome / satellite (#3) ------------------
 // All guarded: the no-arg form probes presence first so a mount without the
 // peripheral prints "not present" instead of a wall of timeouts.
 
@@ -1239,8 +1197,6 @@ func satCmd(m *tenmicron.Mount, args []string) {
 	}
 }
 
-// --- probe groups (name → value/err) ----------------------------------------
-
 func clockProbes(m *tenmicron.Mount) []probe {
 	return []probe{
 		{"siteLat", fF(m.SiteLatitude)},
@@ -1356,12 +1312,7 @@ func domeProbes(m *tenmicron.Mount) []probe {
 	}
 }
 
-// dump sweeps every no-arg read-only getter in one pass — the validation workhorse.
-// Each row prints the friendly name and either the parsed value or the error, so on
-// real hardware you see immediately which queries the mount answers and which the
-// driver still mis-frames (the single-byte-vs-'#'-terminated reply shapes especially).
-// Getters needing an argument (Temperature, RelayClosed, per-star/model reads) and
-// anything that moves hardware are intentionally excluded — use their own verbs.
+// dump prints read-only, no-argument queries and their results.
 func dump(m *tenmicron.Mount) {
 	groups := []struct {
 		title  string
@@ -1471,8 +1422,6 @@ func dump(m *tenmicron.Mount) {
 	}
 }
 
-// --- probe plumbing (name → value/err table) --------------------------------
-
 type probe struct {
 	name string
 	fn   func() (string, error)
@@ -1542,8 +1491,6 @@ func fNet(fn func() (tenmicron.NetworkConfig, error)) func() (string, error) {
 }
 
 func pierStr(p lx200.PierSide, err error) (string, error) { return fmt.Sprintf("%v", p), err }
-
-// --- printers ---------------------------------------------------------------
 
 func report(s string, err error) {
 	if err != nil {

@@ -6,12 +6,8 @@ import (
 	"strings"
 )
 
-// Version is a parsed 10Micron firmware version (:GVN#, "maj.min[.fix]"). It is read
-// once at Connect and read-only thereafter. Several commands and behaviours are gated
-// on the firmware level — e.g. the plain goto command (:MSnf#, ≥2.11.0) and the
-// ASCOM-saved park (:PsX#, ≥2.9.9) — so the driver can pick the vendor-correct form
-// or fall back on older firmware. The zero value (unknown firmware, e.g. a
-// directly-constructed Mount in tests) compares below every real version.
+// Version is a parsed 10Micron firmware version. The zero value is unknown
+// and compares below every real version.
 type Version struct{ Major, Minor, Fix int }
 
 // atLeast reports whether v ≥ maj.min.fix (lexicographic on major, minor, fix).

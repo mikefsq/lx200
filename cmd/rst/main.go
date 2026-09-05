@@ -1,15 +1,4 @@
-// Command rst is a low-level interactive console for Rainbow Astro RST harmonic
-// mounts (RST-135/300), talking the lx200/rst serial dialect directly. It is a
-// CLI tool for controlling the RST mount. This console exposes both the raw
-// LX200 primitives and the typed rst.Mount API.
-//
-//
-// Usage:
-//
-//	rst                       # auto-detect the FTDI adapter, open a REPL
-//	rst -serial /dev/cu.usbserial-XXXX
-//	rst ra                    # one-shot: run a single command and exit
-//	rst g :GR#                # one-shot raw query
+// Command rst provides an interactive console for Rainbow Astro RST mounts.
 package main
 
 import (
@@ -82,7 +71,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	args := fields[1:]
 
 	switch verb {
-	// --- raw protocol primitives --------------------------------------------
 	case "g", "get": // query: write, read until '#'
 		if len(args) != 1 {
 			fmt.Println("usage: g :CMD#")
@@ -121,7 +109,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		s, err := m.Await(d)
 		report(s, err)
 
-	// --- typed reads --------------------------------------------------------
 	case "ra":
 		reportF(m.RA())
 	case "dec":
@@ -165,7 +152,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	case "status", "st":
 		status(m)
 
-	// --- GPS / clock / site / telemetry / config ----------------------------
 	case "lst":
 		reportF(m.SiderealTime())
 	case "localtime":
@@ -230,7 +216,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	case "gps":
 		gps(m)
 
-	// --- target + goto/sync -------------------------------------------------
 	case "sr", "settargetra":
 		if len(args) != 1 {
 			fmt.Println("usage: sr <hours>")
@@ -346,7 +331,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	case "halt", "stop":
 		reportErr(m.Halt())
 
-	// --- tracking -----------------------------------------------------------
 	case "track":
 		if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
 			fmt.Println("usage: track on|off")
@@ -360,7 +344,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	case "lunar":
 		reportErr(m.TrackLunar())
 
-	// --- manual motion ------------------------------------------------------
 	case "move":
 		if d, ok := dir(args); ok {
 			reportErr(m.Move(d))
@@ -374,7 +357,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 	case "pulse":
 		pulse(m, args)
 
-	// --- identity and configuration ---------------------------------------
 	case "serial":
 		report(m.SerialNumber())
 	case "model":
@@ -410,7 +392,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		v, err := m.ClockFormat()
 		reportF(float64(v), err)
 
-	// --- targets and limits -----------------------------------------------
 	case "target":
 		ra, err1 := m.TargetRA()
 		dec, err2 := m.TargetDec()
@@ -444,7 +425,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		}
 		fmt.Printf("  Az %.3f  Alt %.3f\n", az, alt)
 
-	// --- clock ------------------------------------------------------------
 	case "setutc":
 		reportErr(m.SetUTC(time.Now().UTC()))
 	case "setlocaltime":
@@ -461,7 +441,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		}
 		reportErr(m.SetUTCOffset(time.Duration(h) * time.Hour))
 
-	// --- rates ------------------------------------------------------------
 	case "axisrate":
 		if len(args) != 1 {
 			fmt.Printf("usage: axisrate <deg/s>   vendor rates: %v\n", rst.AxisRates())
@@ -486,7 +465,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		}
 		reportErr(m.SetSlewSpeed(n, v))
 
-	// --- catalogue --------------------------------------------------------
 	case "messier", "ngc", "star":
 		if len(args) != 1 {
 			fmt.Printf("usage: %s <number>   (loads the object into the goto target)\n", verb)
@@ -517,7 +495,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		}
 		report(m.SiteSlot())
 
-	// --- the ASCOM contract surface ---------------------------------------
 	case "alpaca":
 		alpacaStatus(m)
 
@@ -533,8 +510,6 @@ func run(m *rst.Mount, line string, timeout time.Duration) {
 		fmt.Printf("unknown command %q (try 'help')\n", verb)
 	}
 }
-
-// --- dispatch helpers -------------------------------------------------------
 
 func dir(args []string) (lx200.Direction, bool) {
 	if len(args) != 1 {
@@ -694,8 +669,6 @@ func waitSlew(m *rst.Mount) {
 	}
 	fmt.Println("timeout waiting for slew to finish")
 }
-
-// --- printers ---------------------------------------------------------------
 
 func report(s string, err error) {
 	if err != nil {

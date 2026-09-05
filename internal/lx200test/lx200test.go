@@ -1,11 +1,4 @@
-// Package lx200test provides a scripted in-memory lx200.Transport for the
-// per-mount dialect tests, replacing the near-identical fake each dialect used to
-// define. It is internal and imported only from _test.go files.
-//
-// (The core lx200 package keeps its own fake: its tests are in-package, and an
-// in-package test importing this helper — which imports lx200 — would be an import
-// cycle. The dialect packages import lx200 already, and this helper does not import
-// them, so there is no cycle there.)
+// Package lx200test provides a scripted transport for mount protocol tests.
 package lx200test
 
 import (
@@ -14,12 +7,8 @@ import (
 	"github.com/mikefsq/lx200"
 )
 
-// Fake is an in-memory lx200.Transport: each command written queues its scripted
-// reply for subsequent reads; a command with no scripted reply produces no bytes
-// (exercising the Blind / timeout paths). An empty Read returns (0, nil) — the
-// serial-style "no data yet" the core's deadline loop expects. All methods are safe
-// for concurrent use (some mounts, e.g. RST pulse-guide, write from a background
-// goroutine).
+// Fake queues scripted replies for written commands. Empty reads return (0, nil).
+// All methods are safe for concurrent use.
 type Fake struct {
 	mu      sync.Mutex
 	replies map[string]string

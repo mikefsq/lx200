@@ -7,12 +7,8 @@ import "fmt"
 // strings, site/time formats) diverge between mounts and belong in the per-mount
 // library, which uses the exported Blind/Ack/Get/Slew primitives directly.
 
-// Frame returns an LX200 command ready for the wire. With raw, cmd is returned
-// unchanged (the caller supplied a complete frame). Otherwise Frame adds the
-// framing a bare command omits — a leading ':' and a trailing '#'. It is the
-// decoration an ASCOM CommandBlind/CommandString/CommandBool passthrough applies to
-// a user-supplied command before handing it to Blind/Get/Ack. An empty command is
-// returned unchanged.
+// Frame adds missing colon/hash delimiters unless raw is true.
+// An empty command is returned unchanged.
 func Frame(cmd string, raw bool) string {
 	if raw || cmd == "" {
 		return cmd
@@ -25,8 +21,6 @@ func Frame(cmd string, raw bool) string {
 	}
 	return cmd
 }
-
-// --- Coordinate queries ---
 
 // RA returns the current right ascension in hours (:GR#).
 func (c *Conn) RA() (float64, error) {
@@ -77,8 +71,6 @@ func (c *Conn) SiderealTime() (float64, error) {
 // different query; override in the per-mount library if so.
 func (c *Conn) Firmware() (string, error) { return c.Get(":GVN#") }
 
-// --- Target + goto ---
-
 // SetTargetRA sets the target right ascension in hours (:Sr HH:MM:SS#). It
 // returns whether the mount accepted the value.
 func (c *Conn) SetTargetRA(hours float64) (bool, error) {
@@ -101,8 +93,6 @@ func (c *Conn) SyncToTarget() (string, error) { return c.Get(":CM#") }
 
 // Halt stops all motion immediately (:Q#).
 func (c *Conn) Halt() error { return c.Blind(":Q#") }
-
-// --- Manual motion ---
 
 // Direction is a cardinal slew direction (the lowercase LX200 move/quit suffix).
 type Direction byte
@@ -134,8 +124,6 @@ const (
 // SetRate selects the manual-slew speed preset (:RG# / :RC# / :RM# / :RS#).
 func (c *Conn) SetRate(r Rate) error { return c.Blind(":R" + string(r) + "#") }
 
-// --- Pulse guide ---
-
 // PulseGuide issues a timed guide pulse of ms milliseconds in one direction
 // (:Mg{n,s,e,w}%04d#). The mount guides for the duration and replies nothing;
 // the call returns once the command is sent (it does not block for the pulse).
@@ -146,8 +134,6 @@ func (c *Conn) PulseGuide(d Direction, ms int) error {
 	}
 	return c.Blind(fmt.Sprintf(":Mg%c%04d#", d, ms))
 }
-
-// --- MoveAxis (Alpaca-style continuous slew) ---
 
 // Axis selects the mount axis for MoveAxis/StopAxis. AxisPrimary is RA/Azimuth
 // (moves East/West); AxisSecondary is Dec/Altitude (moves North/South).
@@ -197,8 +183,6 @@ func (c *Conn) StopAxis(a Axis) error {
 	}
 	return c.HaltMove(d2)
 }
-
-// --- Tracking rate ---
 
 // TrackSidereal selects the sidereal tracking rate (:TQ#).
 func (c *Conn) TrackSidereal() error { return c.Blind(":TQ#") }

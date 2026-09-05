@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// Every command this package can send, checked byte for byte against the frame PROTOCOL.md
-// records. Most of them are silent, so a wrong byte would never be reported by the mount.
+// TestWireFormats checks command bytes, including setters that have no reply.
 func TestWireFormats(t *testing.T) {
 	// Commands answering a '#'-terminated frame rather than a bare ack byte need a fixture
 	// of the right shape, or the read times out instead of returning.

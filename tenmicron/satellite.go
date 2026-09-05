@@ -185,8 +185,6 @@ func (m *Mount) PrecalcTrajectory() (Transit, error) {
 	return parseTransit(strings.TrimSpace(s))
 }
 
-// --- TLE database (:TLEDN# / :TLEDLn#) --------------------------------------
-
 // DatabaseTLECount returns the number of TLEs stored in the mount's database
 // (:TLEDN#, firmware ≥ 2.13.20).
 func (m *Mount) DatabaseTLECount() (int, error) { return m.getInt(":TLEDN#") }
@@ -203,8 +201,6 @@ func (m *Mount) LoadDatabaseTLE(n int) (string, error) {
 	}
 	return s, nil
 }
-
-// --- Trajectory replay + real-time offsets (:TRREPLAY# / :TROFF*) -----------
 
 // ReplayTrajectory precalculates the loaded arbitrary trajectory anchored to the
 // current time (:TRREPLAY#) — like PrecalcTrajectory but starting now — and returns its

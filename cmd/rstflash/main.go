@@ -1,15 +1,4 @@
-// Command rstflash writes firmware to a Rainbow Astro RST mount over the
-// Microchip AN1388 PIC32 bootloader.
-//
-// The controller enters its bootloader when it is powered on with the PREV
-// and NEXT buttons held. rstflash polls for the bootloader on connect.
-//
-// Usage:
-//
-//	rstflash -check RST-135E_260319.hex     # parse the file, touch no hardware
-//	rstflash -info                          # connect and report the bootloader version
-//	rstflash RST-135E_260319.hex            # flash, with a confirmation prompt
-//	rstflash -y -serial /dev/cu.usbserial-X RST-135E_260319.hex
+// Command rstflash writes RST firmware through the Microchip AN1388 bootloader.
 package main
 
 import (
@@ -175,12 +164,7 @@ func connect(c *boot.Client, wait time.Duration) error {
 	return nil
 }
 
-// doIdentify works out what the mount actually is, using only the bootloader's
-// one read primitive.
-//
-// The controller family can be determined based on which application base address
-// has code below it. The exact installed build is found by checksumming each candidate
-// image's range and comparing to local .hex files.
+// doIdentify compares device CRCs with candidate firmware images.
 func doIdentify(portName string, baud int, wait time.Duration, files []string) error {
 	type cand struct {
 		path string

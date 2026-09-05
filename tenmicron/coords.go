@@ -6,20 +6,8 @@ import (
 	"strings"
 )
 
-// Coordinate formatting for the 10Micron ultra-precision (:U2#) mode that Connect
-// forces. In that mode the mount accepts — and the vendor ASCOM driver emits —
-// fractional-second target coordinates:
-//
-//	:Sr HH:MM:SS.ss   (RA,  centisecond)
-//	:Sd sDD*MM:SS.s   (Dec, decisecond)
-//	:Sa sDD*MM:SS.s   (Alt, decisecond)
-//	:Sz DDD*MM:SS.s   (Az,  decisecond)
-//
-// The shared lx200 core's FormatHMS/FormatDMS emit whole seconds, which would
-// quantise a target to ~15" in RA and ~1" in Dec/Alt — discarding exactly the
-// precision :U2# exists to provide. So the 10Micron target setters use the encoders
-// below instead. (Reads are unaffected: they come from :Ginfo# decimal fields or go
-// through the lenient ParseSexagesimal.)
+// Ultra-precision mode (:U2#) uses fractional seconds: centiseconds for RA
+// and deciseconds for Dec, Alt, and Az.
 
 // hmsPrec formats hours as "HH:MM:SS" plus `decimals` fractional-second digits,
 // wrapping into [0,24). It matches the vendor's :Sr encoding at decimals=2.
@@ -38,11 +26,7 @@ func dmsPrec(deg float64, degWidth, decimals int, forceSign bool) string {
 	return encodeSex(deg, "*:", forceSign, degWidth, decimals)
 }
 
-// encodeSex renders a decimal value (hours or degrees) as a sexagesimal string with
-// the given two field separators, leading-field width, and fractional-second digits.
-// It rounds half-up at the finest emitted unit, mirroring the vendor's EncodeLXString
-// (which biases by half an ULP before truncating each field), so a value that lands
-// just shy of a second boundary carries correctly instead of truncating down.
+// encodeSex formats hours or degrees, rounding half-up to the requested precision.
 func encodeSex(value float64, seps string, forceSign bool, firstWidth, decimals int) string {
 	sign := ""
 	if value < 0 {

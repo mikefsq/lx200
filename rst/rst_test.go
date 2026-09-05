@@ -422,9 +422,7 @@ func TestTrackRatesAndPark(t *testing.T) {
 	}
 }
 
-// :AH# is not an at-home flag. The firmware's :Ch# handler tests it to refuse a re-entrant
-// home, sets it, runs the seek and clears it, so it reads 0 immediately after a home succeeds.
-// This package briefly had AtHome calling it, and a homed mount reported not-at-home.
+// :AH# indicates an active home seek and clears when it finishes.
 func TestHomingReportsTheBusyGuardNotAtHome(t *testing.T) {
 	m, f := newMount(map[string]string{":AH#": ":AH1#"})
 	if busy, err := m.Homing(); err != nil || !busy {
@@ -473,8 +471,6 @@ func TestAtHomeRequiresHomeFound(t *testing.T) {
 // checked only the other would fail here.
 func TestAtHomeFalseAwayFromHome(t *testing.T) {
 	for _, c := range []struct{ name, cy string }{
-		// The reading that exposed the bug: the derived position said exactly home while the
-		// RA axis sat 200 degrees from it.
 		{"RA axis 200 degrees out", ":CY+000.00/-200.06#"},
 		{"Dec axis folded up", ":CY+089.49/-000.00#"},
 		{"both axes away", ":CY+045.00/-010.00#"},
@@ -550,14 +546,8 @@ func TestCandidatesFilter(t *testing.T) {
 	}
 }
 
-// A pin is the only thing that narrows the scan, and it is absolute: a port that does not match
-// is never opened, whatever else is on the bus.
-//
-// There is no exclusion list any more. One existed, learned from ports that were probed and
-// answered nothing, and it blacklisted the mount: a mount is silent for the first few seconds
-// after a power cycle while its USB bridge has already re-enumerated, so an ordinary power cycle
-// recorded it as "not an RST" and it was never opened again. Silence cannot tell a neighbour
-// from a mount that is not talking yet.
+// Only matching USB serials are probed when a pin is set. Silent ports remain
+// eligible on subsequent scans because the mount may still be starting.
 func TestCandidatesKeepsUnidentifiablePorts(t *testing.T) {
 	ports := []serial.PortInfo{{Name: "/dev/cu.usbserial-1410", IsUSB: true}}
 	if got := candidates(ports, Filter{}); len(got) != 1 {
@@ -808,9 +798,7 @@ func TestSelectDialectWritesWhenTheEchoIsOff(t *testing.T) {
 	}
 }
 
-// More stray frames than GetMatching's skip budget must not corrupt a read. It previously
-// returned the last unmatched frame, which get mis-parsed as a coordinate; it now drains and
-// retries once.
+// Exceeding the reply skip budget must drain and retry without returning a stray frame.
 func TestGetRetriesPastExcessStrayTokens(t *testing.T) {
 	m, f := newMount(map[string]string{":GR#": ":GR20:28:56.9#"})
 	// Five stray tokens ahead of the reply, past the skip budget of a single attempt.
@@ -833,9 +821,7 @@ func TestGetErrorsRatherThanReturningGarbage(t *testing.T) {
 	}
 }
 
-// Park must command an hour angle rather than a sky position. The pole is an RA singularity, so
-// only the hour angle fixes where the RA axis stops; +6h is RA axis 0, tube on top. The alt/az
-// goto this replaced landed the RA axis at -80.62 on hardware, tube out to the side.
+// Park commands hour angle +6h to pin the RA axis at zero near the pole.
 func TestParkCommandsHourAnglePlusSixNotThePolePosition(t *testing.T) {
 	for _, c := range []struct{ name, lst, wantRA string }{
 		{"midday LST", ":GS16:00:00#", ":Sr10:00:00.0#"},
@@ -907,10 +893,7 @@ func TestParkRequiresHomeFound(t *testing.T) {
 	}
 }
 
-// The sexagesimal split rounds to the wire's precision before splitting into fields. Truncating
-// first drops a whole minute whenever floating point lands a value just under an exact
-// boundary, as any "N degrees and M arcminutes" constant does. parkDec is the live
-// example: it was formatted as 89*58'59.9, one arcminute short.
+// Round sexagesimal values before splitting fields to preserve minute boundaries.
 func TestSexagesimalRoundsBeforeSplitting(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -1043,13 +1026,8 @@ func countWrites(f *lx200test.Fake, cmd string) int {
 	return n
 }
 
-// A mount already on the polar axis is latched without slewing.
-//
-// This is not a shortcut, it is the fix for a wedge. A goto to where the mount already is draws
-// no completion token from this firmware, so the driver waited forever for one: slewing stayed
-// latched, the deferred tracking-off never ran, and the mount sat tracking and drifted off the
-// park. Observed on hardware. Park/Unpark/Park reaches it in two clicks, because Unpark leaves
-// the tube exactly where it was.
+// A mount already parked must stop without a slew: a zero-distance goto
+// may never produce a completion token.
 func TestParkAtTheParkPositionSkipsTheGoto(t *testing.T) {
 	m, f := newMount(map[string]string{
 		":CtL#": ":CTL#",
@@ -1096,13 +1074,7 @@ func TestParkAwayFromTheParkPositionStillSlews(t *testing.T) {
 	}
 }
 
-// A home seek in flight blocks the commands that can interfere with it.
-//
-// The seek is one synchronous call inside the firmware's :Ch# handler, and the busy flag that
-// guards re-entry is cleared only when that call returns. Commands delivered into it write the
-// globals it is looping on, and on the development mount a goto plus three halts arriving
-// mid-seek left the flag set for good: :Ch# became a silent no-op and only a power cycle
-// cleared it. Nothing in the protocol writes that flag, so there is no recovery over the wire.
+// A home seek blocks commands that can leave the firmware busy until power-cycled.
 func TestCommandsThatCanWedgeAHomeSeekAreRefused(t *testing.T) {
 	for _, c := range []struct {
 		name string

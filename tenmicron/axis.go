@@ -169,12 +169,8 @@ func (m *Mount) ParkInPlace() error {
 // ParkToSaved slews to the saved park angular position and parks (:PsX#).
 func (m *Mount) ParkToSaved() error { return m.parkCode(":PsX#") }
 
-// SaveParkPosition stores the current angular position as the park position used by
-// Park / ParkToSaved (:PyX#). The reply is a SINGLE bare status byte with no '#'
-// terminator (read with AckByte, not Get, which would stall the command timeout). The
-// spec documents both success and failure as "0", but the vendor ASCOM driver treats
-// reply '1' as success and anything else as failure — the mount's actual behaviour —
-// so this does the same rather than swallowing a failed save.
+// SaveParkPosition saves the current angular position for Park and ParkToSaved.
+// The mount returns a bare status byte: 1 means success.
 func (m *Mount) SaveParkPosition() error {
 	b, err := m.AckByte(":PyX#")
 	if err != nil {
