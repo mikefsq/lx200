@@ -271,21 +271,86 @@ func FindMatching(f Filter) (*Mount, Report, error) {
 	return nil, rep, fmt.Errorf("rainbow: no RST mount answered on %d candidate port(s) (FTDI 0403:6001)", len(cands))
 }
 
+// Discovered is an RST that answered on a candidate port.
+type Discovered struct {
+	Port    string // the serial port the mount answered on
+	Serial  string // USB bridge serial; empty where the platform does not report one (macOS)
+	Version string // firmware version, from :AV#
+}
+
+// Discover lists the RSTs attached to this machine, WITHOUT keeping any of them open.
+//
+// It exists because an FTDI bridge cannot be told from its descriptor: 0403:6001 is the same
+// chip a Unihedron SQM, an MGPBox and half the other instruments on a rig use, so a caller that
+// listed candidate ports would report every one of them as a mount. The only thing that
+// distinguishes an RST is that it answers :AV#, which is what probeRST asks and what Find has
+// always relied on.
+//
+// The difference from Find is what happens next: this closes the port and reports what it heard,
+// where Find keeps the mount it opened. That is what makes it usable for configuring a device —
+// a host can list the mounts, let someone pick one, and store its bridge serial, without holding
+// hardware it is not driving yet.
+//
+// Ports another process holds are skipped rather than reported: a busy port cannot be asked, and
+// a mount that is already open is one this machine has already found.
+func Discover() ([]Discovered, error) {
+	ports, err := serial.List()
+	if err != nil {
+		return nil, err
+	}
+	var out []Discovered
+	for _, c := range dedupeAliases(candidates(ports, Filter{})) {
+		if v, ok := probeVersion(c.Name); ok {
+			out = append(out, Discovered{Port: c.Name, Serial: c.SerialNumber, Version: v})
+		}
+	}
+	return out, nil
+}
+
+// dedupeAliases drops the /dev/tty.* half of a macOS port pair.
+//
+// Darwin exposes one USB serial device twice: /dev/cu.usbserial-X for calling out and
+// /dev/tty.usbserial-X for dialling in. They are the same mount, and the tty. side blocks on
+// carrier detect — so probing it costs a full timeout and, if it ever answered, would report the
+// mount twice.
+func dedupeAliases(ports []serial.PortInfo) []serial.PortInfo {
+	callout := map[string]bool{}
+	for _, p := range ports {
+		if strings.HasPrefix(p.Name, "/dev/cu.") {
+			callout[strings.TrimPrefix(p.Name, "/dev/cu.")] = true
+		}
+	}
+	var out []serial.PortInfo
+	for _, p := range ports {
+		if strings.HasPrefix(p.Name, "/dev/tty.") && callout[strings.TrimPrefix(p.Name, "/dev/tty.")] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // probeRST reports whether an RST answers on portName.
 func probeRST(portName string) bool {
+	_, ok := probeVersion(portName)
+	return ok
+}
+
+// probeVersion asks portName for its firmware version, closing the port again.
+func probeVersion(portName string) (string, bool) {
 	m, err := openRaw(portName, probeTimeout)
 	if err != nil {
-		return false // busy (another driver holds it) or not openable
+		return "", false // busy (another driver holds it) or not openable
 	}
 	defer m.Close()
 	// An RST already in the Rainbow dialect answers :AV# without anything being written to it,
 	// which matters because this runs against ports belonging to other instruments.
-	if _, err := m.Version(); err == nil {
-		return true
+	if v, err := m.Version(); err == nil {
+		return v, true
 	}
 	m.selectDialect()
-	_, err = m.Version()
-	return err == nil
+	v, err := m.Version()
+	return v, err == nil
 }
 
 // findPort picks the RST's serial port from an enumerated list, or returns "" if nothing
