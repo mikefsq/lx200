@@ -236,15 +236,25 @@ func Find() (*Mount, error) {
 	return m, err
 }
 
-// Filter restricts discovery to a USB serial number when specified.
+// Filter restricts discovery to one mount when specified.
 // Silent ports are not excluded from later scans: a mount may still be starting.
+//
+// The two serials are not the same identity and are filtered at different costs. The BRIDGE
+// serial comes from the port enumerator, so it narrows the candidate list before anything is
+// opened. The MOUNT serial comes from the mount itself, so it can only be checked after a port is
+// opened and asked — every candidate gets probed, and the ones that answer with the wrong serial
+// are closed again. Setting both narrows first and confirms second, which is what a rig that
+// moved its mount to a different USB adapter wants.
 type Filter struct {
-	Serial string // bind only this USB bridge serial; empty = any candidate
+	Serial      string // bind only this USB bridge serial; empty = any candidate
+	MountSerial string // bind only the mount answering this :AS# serial; empty = any mount
 }
 
 // Report is what a search learned, for a caller that wants to remember it.
 type Report struct {
-	Serial string // the USB bridge serial the mount was found on ("" if unknown)
+	Serial      string // the USB bridge serial the mount was found on ("" if unknown)
+	MountSerial string // the mount's own :AS# serial ("" if it did not answer)
+	Version     string // the firmware version the mount reported
 }
 
 // FindMatching opens the RST that satisfies f, and reports what it learned on the way.
@@ -261,21 +271,32 @@ func FindMatching(f Filter) (*Mount, Report, error) {
 		}
 		return nil, rep, fmt.Errorf("rainbow: no RST mount found (FTDI 0403:6001)")
 	}
+	answered := 0
 	for _, c := range cands {
-		if probeRST(c.Name) {
-			rep.Serial = c.SerialNumber
-			m, err := Open(c.Name)
-			return m, rep, err
+		id, ok := probeIdentity(c.Name)
+		if !ok {
+			continue
 		}
+		answered++
+		if f.MountSerial != "" && !strings.EqualFold(id.serial, f.MountSerial) {
+			continue // an RST, but not the one this rig is bound to
+		}
+		rep.Serial, rep.MountSerial, rep.Version = c.SerialNumber, id.serial, id.version
+		m, err := Open(c.Name)
+		return m, rep, err
+	}
+	if f.MountSerial != "" && answered > 0 {
+		return nil, rep, fmt.Errorf("rainbow: %d RST mount(s) answered, none with serial %q", answered, f.MountSerial)
 	}
 	return nil, rep, fmt.Errorf("rainbow: no RST mount answered on %d candidate port(s) (FTDI 0403:6001)", len(cands))
 }
 
 // Discovered is an RST that answered on a candidate port.
 type Discovered struct {
-	Port    string // the serial port the mount answered on
-	Serial  string // USB bridge serial; empty where the platform does not report one (macOS)
-	Version string // firmware version, from :AV#
+	Port        string // the serial port the mount answered on
+	Serial      string // USB bridge serial, from the port enumerator
+	Version     string // firmware version, from :AV#
+	MountSerial string // the mount's own manufacturer serial, from :AS#; empty if it did not answer
 }
 
 // Discover lists the RSTs attached to this machine, WITHOUT keeping any of them open.
@@ -300,8 +321,10 @@ func Discover() ([]Discovered, error) {
 	}
 	var out []Discovered
 	for _, c := range dedupeAliases(candidates(ports, Filter{})) {
-		if v, ok := probeVersion(c.Name); ok {
-			out = append(out, Discovered{Port: c.Name, Serial: c.SerialNumber, Version: v})
+		if id, ok := probeIdentity(c.Name); ok {
+			out = append(out, Discovered{
+				Port: c.Name, Serial: c.SerialNumber, Version: id.version, MountSerial: id.serial,
+			})
 		}
 	}
 	return out, nil
@@ -332,25 +355,46 @@ func dedupeAliases(ports []serial.PortInfo) []serial.PortInfo {
 
 // probeRST reports whether an RST answers on portName.
 func probeRST(portName string) bool {
-	_, ok := probeVersion(portName)
+	_, ok := probeIdentity(portName)
 	return ok
 }
 
-// probeVersion asks portName for its firmware version, closing the port again.
-func probeVersion(portName string) (string, bool) {
+// identity is what one probe learned about the mount on a port.
+type identity struct {
+	version string // :AV#
+	serial  string // :AS#, empty when the mount did not answer it
+}
+
+// probeIdentity asks portName what it is, closing the port again.
+//
+// The version is what decides whether an RST is there — it is the answer this dialect gives that
+// nothing else on an FTDI bridge will. The serial is read in the same open because the cost of a
+// probe is the open, not the query: asking twice would mean opening the port twice, and an
+// operator choosing between two mounts needs the number printed on the one in front of them.
+//
+// A mount that does not answer :AS# is still an RST. The command is documented by the INDI driver
+// rather than by anything captured off the wire, so an older firmware refusing it must not make
+// the mount undiscoverable.
+func probeIdentity(portName string) (identity, bool) {
 	m, err := openRaw(portName, probeTimeout)
 	if err != nil {
-		return "", false // busy (another driver holds it) or not openable
+		return identity{}, false // busy (another driver holds it) or not openable
 	}
 	defer m.Close()
 	// An RST already in the Rainbow dialect answers :AV# without anything being written to it,
 	// which matters because this runs against ports belonging to other instruments.
-	if v, err := m.Version(); err == nil {
-		return v, true
-	}
-	m.selectDialect()
 	v, err := m.Version()
-	return v, err == nil
+	if err != nil {
+		m.selectDialect()
+		if v, err = m.Version(); err != nil {
+			return identity{}, false
+		}
+	}
+	id := identity{version: v}
+	if sn, err := m.Serial(); err == nil {
+		id.serial = sn
+	}
+	return id, true
 }
 
 // findPort picks the RST's serial port from an enumerated list, or returns "" if nothing
@@ -397,6 +441,14 @@ func candidates(ports []serial.PortInfo, f Filter) []serial.PortInfo {
 
 // Version returns the firmware version (:AV#).
 func (m *Mount) Version() (string, error) { return m.get(":AV#", ":AV") }
+
+// Serial returns the mount's manufacturer serial number (:AS#).
+//
+// This is the MOUNT's identity, not the USB bridge's: it stays the same when the mount is moved
+// to another adapter or another machine, where the bridge serial follows the cable. Both are worth
+// having — the bridge serial is what a port can be filtered by without opening it, and this is
+// what says which mount answered once one is open.
+func (m *Mount) Serial() (string, error) { return m.get(":AS#", ":AS") }
 
 // drainToken peeks for a pushed completion token, but only while a move is in flight and at
 // most once per peekTTL. It runs before a coordinate read so the token is not mistaken for the
