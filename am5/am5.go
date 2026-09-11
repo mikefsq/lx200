@@ -42,6 +42,14 @@ func Dial(addr string) (*Mount, error) {
 	return &Mount{Conn: lx200.New(tr, 3*time.Second)}, nil
 }
 
+// Product returns the mount's product name (:GVP#), e.g. "AM5". It is what identifies an
+// AM-series mount on a port: ZWO's USB vendor id covers cameras and wheels too, so the descriptor
+// narrows and this confirms.
+func (m *Mount) Product() (string, error) { return m.Get(":GVP#") }
+
+// Firmware returns the mount's firmware version (:GV#), e.g. "1.5.3".
+func (m *Mount) Firmware() (string, error) { return m.Get(":GV#") }
+
 // Status is the decoded AM5 status. :GU# is parsed by character presence (as the
 // ZWO firmware/INDI driver do): 'N' = slew complete, 'H' = at home, 'Z' = AltAz
 // mode, 'G' = equatorial mode. Tracking is a separate :GAT# query.
@@ -194,10 +202,14 @@ func (m *Mount) SetSiteLongitude(deg float64) error {
 // not affect pointing). Present to satisfy SiteSetter.
 func (m *Mount) SetSiteElevation(meters float64) error { return nil }
 
-// Clock — mirror INDI's AM5 driver: set the (negated) UTC offset and the local
-// date. AM5's INDI driver sends neither local time (:SL) nor elevation; the
-// mount keeps its own time-of-day, so date + offset is all it sets. A UTC-zoned
-// t yields a zero offset and a UTC date.
+// Clock — set the (negated) UTC offset, the local date and the time of day, in that order,
+// which is the order ZWO's own tool sends them.
+//
+// INDI's AM5 driver sends only the offset and the date, and this followed it until a capture
+// showed the vendor sending :SL# as well and the mount acking it. Leaving the time of day alone
+// means trusting a clock nobody set — which an AltAz mount cannot afford, since its pointing is
+// derived from it. Elevation is still not sent: no published driver sends it and it does not
+// affect pointing. A UTC-zoned t yields a zero offset and a UTC date.
 func (m *Mount) SetUTC(t time.Time) error {
 	_, offSec := t.Zone() // seconds east of UTC (local = UTC + offSec)
 	off := -offSec        // :SG is "hours added to local to yield UTC" (INDI negates)
@@ -208,7 +220,10 @@ func (m *Mount) SetUTC(t time.Time) error {
 	if err := must(m.Ack(fmt.Sprintf(":SG%c%02d:%02d#", sign, off/3600, (off%3600)/60))); err != nil {
 		return err
 	}
-	return must(m.Ack(t.Format(":SC01/02/06#"))) // local date, mm/dd/yy
+	if err := must(m.Ack(t.Format(":SC01/02/06#"))); err != nil { // local date, mm/dd/yy
+		return err
+	}
+	return m.SetLocalTime(t)
 }
 
 // SetRate maps the core's four letter presets onto AM5's numbered rates. It
@@ -280,8 +295,17 @@ func (m *Mount) MountMode() (MountMode, error) {
 	return ModeEquatorial, nil
 }
 
-// SetMountMode switches EQ (:AP#) / AltAz (:AA#). Takes effect after a mount
-// power-cycle (a ZWO quirk).
+// SetMountMode switches EQ (:AP#) / AltAz (:AA#).
+//
+// It takes effect at once on firmware 1.8.8, contrary to what this said before: a capture of
+// ZWO's own tool shows :GU# reporting the new mode on the very next poll, and :GD#/:GZ# returning
+// the same physical pointing re-expressed in the new frame on the first read after the command
+// (docs/am5-command-set.md). Neither command is acknowledged, which is why this is Blind — the
+// vendor batches it into the next poll packet and reads the reply belonging to that.
+//
+// What remains untested is whether the mount SLEWS correctly in the new frame without a restart;
+// nothing was slewed between the two switches in that capture. If the old "needs a power-cycle"
+// claim was ever true of anything, that is the most plausible candidate.
 func (m *Mount) SetMountMode(mode MountMode) error {
 	cmd := ":AP#"
 	if mode == ModeAltAz {

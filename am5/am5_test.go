@@ -89,22 +89,26 @@ func TestSiteLongitudeReversed(t *testing.T) {
 
 // TestSetUTC: INDI parity — send (negated) :SG offset + local :SC date, and
 // never :SL or :Sev.
+// SetUTC sends offset, date and time of day, in the order ZWO's tool sends them. The time of day
+// was added once a capture showed the vendor sending :SL# and the mount acking it; INDI's driver
+// omits it, which leaves an AltAz mount deriving its pointing from a clock nobody set.
 func TestSetUTC(t *testing.T) {
 	cases := []struct {
-		t              time.Time
-		wantSG, wantSC string
+		t                      time.Time
+		wantSG, wantSC, wantSL string
 	}{
-		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC), ":SG+00:00#", ":SC06/02/26#"},
-		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.FixedZone("IST", 5*3600+30*60)), ":SG-05:30#", ":SC06/02/26#"},
-		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.FixedZone("EST", -5*3600)), ":SG+05:00#", ":SC06/02/26#"},
+		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC), ":SG+00:00#", ":SC06/02/26#", ":SL12:00:00#"},
+		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.FixedZone("IST", 5*3600+30*60)), ":SG-05:30#", ":SC06/02/26#", ":SL12:00:00#"},
+		{time.Date(2026, 6, 2, 12, 0, 0, 0, time.FixedZone("EST", -5*3600)), ":SG+05:00#", ":SC06/02/26#", ":SL12:00:00#"},
 	}
 	for _, c := range cases {
-		m, f := newMount(map[string]string{c.wantSG: "1", c.wantSC: "1"})
+		m, f := newMount(map[string]string{c.wantSG: "1", c.wantSC: "1", c.wantSL: "1"})
 		if err := m.SetUTC(c.t); err != nil {
 			t.Fatalf("SetUTC(%v): %v", c.t, err)
 		}
-		if w := f.Writes(); len(w) != 2 || w[0] != c.wantSG || w[1] != c.wantSC {
-			t.Errorf("SetUTC(%v) wrote %v, want [%s %s] (no :SL)", c.t, w, c.wantSG, c.wantSC)
+		want := []string{c.wantSG, c.wantSC, c.wantSL}
+		if w := f.Writes(); len(w) != 3 || w[0] != want[0] || w[1] != want[1] || w[2] != want[2] {
+			t.Errorf("SetUTC(%v) wrote %v, want %v", c.t, w, want)
 		}
 	}
 }
